@@ -24,13 +24,37 @@ module.exports = async function (req, res) {
     const pageTitle = $('title').text();
     let scoreFromTitle = pageTitle.includes('-') ? pageTitle.split('-')[0].trim() : "Fetching Score...";
 
-    // 2. Extract Active Bowler Name and Figures
-    // We target the mini-scorecard bowler row which is very reliable for live games
-    let bowlerInfo = $('.cb-min-bwl-rw').first().text().trim();
+    // 2. Aggressive Bowler Extraction (Deep Scan)
+    let bowlerInfo = "";
     
-    if (!bowlerInfo) {
-        // Fallback search for bowler name in the stats table
-        bowlerInfo = $('.cb-col-50').filter((i, el) => $(el).text().includes('ovrs')).first().prev().text().trim();
+    // Method A: Direct class targeting (most common on live matches)
+    const bowlerRow = $('.cb-min-bwl-rw').first();
+    if (bowlerRow.length > 0) {
+        const name = bowlerRow.find('.cb-text-link, a').first().text().trim();
+        const overs = bowlerRow.find('.cb-col-10, .cb-col-8').eq(0).text().trim();
+        const runs = bowlerRow.find('.cb-col-10, .cb-col-8').eq(2).text().trim();
+        const wkts = bowlerRow.find('.cb-col-10, .cb-col-8').eq(3).text().trim();
+        
+        if (name) bowlerInfo = `${name} [${wkts}/${runs} in ${overs} ov]`;
+    }
+
+    // Method B: Look for the exact word "Bowler" on the page and grab the player under it
+    if (!bowlerInfo || bowlerInfo.includes("undefined")) {
+        $('div, span').each((i, el) => {
+            if ($(el).text().trim() === 'Bowler') {
+                const nextContainer = $(el).parent().next();
+                const foundName = nextContainer.find('a').first().text().trim();
+                if (foundName) {
+                    bowlerInfo = foundName + " (Active)";
+                    return false; // Break the loop once found
+                }
+            }
+        });
+    }
+
+    // Fallback if completely hidden by Cricbuzz during an over break
+    if (!bowlerInfo || bowlerInfo === "") {
+        bowlerInfo = "Data encrypted during over break...";
     }
 
     const liveStatus = $('.cb-text-live, .cb-text-complete').first().text().trim() || "In Progress";
@@ -42,7 +66,7 @@ module.exports = async function (req, res) {
         title: "GT vs SRH",
         live_score: scoreFromTitle,
         status: liveStatus,
-        bowler: bowlerInfo || "Awaiting Bowler Data..."
+        bowler: bowlerInfo
       }
     });
 
