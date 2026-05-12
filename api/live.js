@@ -20,16 +20,19 @@ module.exports = async function (req, res) {
 
     const $ = cheerio.load(html);
 
-    // The Bulletproof Method: Read the Browser Tab Title
+    // 1. Stable Score from Browser Title
     const pageTitle = $('title').text();
-    let scoreFromTitle = "Fetching Score...";
+    let scoreFromTitle = pageTitle.includes('-') ? pageTitle.split('-')[0].trim() : "Fetching Score...";
+
+    // 2. Extract Active Bowler Name and Figures
+    // We target the mini-scorecard bowler row which is very reliable for live games
+    let bowlerInfo = $('.cb-min-bwl-rw').first().text().trim();
     
-    // The title usually looks like: "GT 45/2 (5.3) vs SRH - Live Cricket Score..."
-    if (pageTitle.includes('-')) {
-      scoreFromTitle = pageTitle.split('-')[0].trim();
+    if (!bowlerInfo) {
+        // Fallback search for bowler name in the stats table
+        bowlerInfo = $('.cb-col-50').filter((i, el) => $(el).text().includes('ovrs')).first().prev().text().trim();
     }
 
-    // Try to grab the status text (e.g., "Sunrisers Hyderabad opt to bowl")
     const liveStatus = $('.cb-text-live, .cb-text-complete').first().text().trim() || "In Progress";
 
     res.status(200).json({
@@ -38,9 +41,9 @@ module.exports = async function (req, res) {
       match_info: {
         title: "GT vs SRH",
         live_score: scoreFromTitle,
-        status: liveStatus
-      },
-      debug_title: pageTitle // This will show us exactly what Vercel sees
+        status: liveStatus,
+        bowler: bowlerInfo || "Awaiting Bowler Data..."
+      }
     });
 
   } catch (error) {
