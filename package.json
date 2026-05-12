@@ -1,0 +1,13 @@
+{
+  "name": "ipct-cricbuzz-uplink",
+  "version": "1.0.0",
+  "description": "Serverless API for live cricket scores for IPCT",
+  "main": "api/live.js",
+  "scripts": {
+    "start": "node api/live.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "cheerio": "^1.0.0-rc.12"
+  }
+}
