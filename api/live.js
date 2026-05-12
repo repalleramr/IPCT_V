@@ -24,37 +24,37 @@ module.exports = async function (req, res) {
     const pageTitle = $('title').text();
     let scoreFromTitle = pageTitle.includes('-') ? pageTitle.split('-')[0].trim() : "Fetching Score...";
 
-    // 2. Aggressive Bowler Extraction (Deep Scan)
+    // 2. Deep Intelligence Bowler Scraper
     let bowlerInfo = "";
     
-    // Method A: Direct class targeting (most common on live matches)
-    const bowlerRow = $('.cb-min-bwl-rw').first();
-    if (bowlerRow.length > 0) {
-        const name = bowlerRow.find('.cb-text-link, a').first().text().trim();
-        const overs = bowlerRow.find('.cb-col-10, .cb-col-8').eq(0).text().trim();
-        const runs = bowlerRow.find('.cb-col-10, .cb-col-8').eq(2).text().trim();
-        const wkts = bowlerRow.find('.cb-col-10, .cb-col-8').eq(3).text().trim();
-        
-        if (name) bowlerInfo = `${name} [${wkts}/${runs} in ${overs} ov]`;
-    }
+    // Method 1: Check standard Live Match rows
+    $('.cb-min-bwl-rw').each((i, el) => {
+        const name = $(el).find('a').first().text().trim();
+        const stats = $(el).text().replace(name, '').replace(/\s+/g, ' ').trim();
+        if (name) bowlerInfo = `${name} [${stats}]`;
+    });
 
-    // Method B: Look for the exact word "Bowler" on the page and grab the player under it
-    if (!bowlerInfo || bowlerInfo.includes("undefined")) {
-        $('div, span').each((i, el) => {
-            if ($(el).text().trim() === 'Bowler') {
-                const nextContainer = $(el).parent().next();
-                const foundName = nextContainer.find('a').first().text().trim();
-                if (foundName) {
-                    bowlerInfo = foundName + " (Active)";
-                    return false; // Break the loop once found
+    // Method 2: If Method 1 fails, search all tables for player stats with 'ov'
+    if (!bowlerInfo) {
+        $('.cb-col-100').each((i, el) => {
+            const text = $(el).text();
+            if (text.includes('ov') && (text.includes('wkts') || text.includes('runs'))) {
+                const parts = text.split(/\d+\.?\d*/); // Split by numbers to find the name
+                const name = parts[0].replace('Bowler', '').trim();
+                if (name && name.length < 30) {
+                    bowlerInfo = name + " (Active)";
                 }
             }
         });
     }
 
-    // Fallback if completely hidden by Cricbuzz during an over break
-    if (!bowlerInfo || bowlerInfo === "") {
-        bowlerInfo = "Data encrypted during over break...";
+    // Method 3: Fallback to the mini-summary text if available
+    if (!bowlerInfo) {
+        const summary = $('.cb-min-inf').text();
+        if (summary.includes('to')) {
+             const parts = summary.split('to');
+             bowlerInfo = parts[0].trim(); // Usually "Bowler Name to Batsman Name"
+        }
     }
 
     const liveStatus = $('.cb-text-live, .cb-text-complete').first().text().trim() || "In Progress";
@@ -66,7 +66,7 @@ module.exports = async function (req, res) {
         title: "GT vs SRH",
         live_score: scoreFromTitle,
         status: liveStatus,
-        bowler: bowlerInfo
+        bowler: bowlerInfo || "Scanning Field for Bowler..."
       }
     });
 
