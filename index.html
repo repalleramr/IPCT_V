@@ -1,49 +1,40 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>IPCT Satellite Uplink</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            background-color: #0a0a0a;
-            color: #00ffcc;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            height: 100vh;
-            margin: 0;
-        }
-        .container {
-            border: 1px solid #333;
-            padding: 40px;
-            border-radius: 8px;
-            background-color: #111;
-            text-align: center;
-        }
-        a {
-            color: #ffffff;
-            text-decoration: none;
-            background-color: #00ffcc;
-            color: #000;
-            padding: 10px 20px;
-            border-radius: 4px;
-            font-weight: bold;
-            display: inline-block;
-            margin-top: 20px;
-        }
-        a:hover {
-            background-color: #00ccaa;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>📡 IPCT Uplink Active</h1>
-        <p>The serverless API mirror is successfully running.</p>
-        <a href="/api/live">View Live Cricket Data</a>
-    </div>
-</body>
-</html>
+    <h1>IPCT_V Mirror is Live</h1>
+    <p>Data is at <a href="/api/live">/api/live</a></p>
+    ```
+3.  Commit and wait 10 seconds.**Interaction #13**
+**Date/Time:** May 12, 2026 | 07:08 PM
+
+---
+
+I checked that specific deployment URL. The reason you are seeing a 404 on that long link is exactly the same as before: **there is no homepage (`index.html`) at the root of your project.**
+
+Vercel is successfully hosting your files, but it doesn't know what to show you when you visit the "main" address. 
+
+### The Real Test
+To see if your work is actually working, you must click this specific link (I added `/api/live` to your deployment URL):
+
+👉 **[Click here to test your API](https://ipct-v2-git-main-r-venkata-rami-reddy-s-projects.vercel.app/api/live)**
+
+---
+
+### If that link still shows a 404:
+Then Vercel is not "seeing" your `api` folder. This usually happens if your GitHub repository has an extra folder layer. 
+
+**Go to your GitHub repo `Repalleramr/IPCT_V` and check this immediately:**
+*   When you open the repo, do you see the `api` folder right away? 
+*   **Or** do you see a folder named `IPCT_V`, and you have to click *that* to see the `api` folder?
+
+**If you have to click a folder to find your code, Vercel will fail.** All files (`api` folder, `package.json`) must be at the very top level of the repository.
+
+### How to fix the "Main Site" 404
+To make your main link (`[https://ipct-v2...vercel.app/](https://ipct-v2...vercel.app/)`) work and show something instead of an error, do this:
+
+1.  Create a new file in your GitHub root named **`index.html`**.
+2.  Paste this simple code:
+    ```html
+    <h1>IPCT_V Mirror is Live</h1>
+    <p>Data is at <a href="/api/live">/api/live</a></p>
+    ```
+3.  Commit and wait 10 seconds.
+
+**Does the `/api/live` link show your cricket data now, or are you seeing an error message on that page?**
