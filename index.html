@@ -1,8 +1,49 @@
 <!DOCTYPE html>
-<html>
-<head><title>IPCT Uplink</title></head>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IPCT Satellite Uplink</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #0a0a0a;
+            color: #00ffcc;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .container {
+            border: 1px solid #333;
+            padding: 40px;
+            border-radius: 8px;
+            background-color: #111;
+            text-align: center;
+        }
+        a {
+            color: #ffffff;
+            text-decoration: none;
+            background-color: #00ffcc;
+            color: #000;
+            padding: 10px 20px;
+            border-radius: 4px;
+            font-weight: bold;
+            display: inline-block;
+            margin-top: 20px;
+        }
+        a:hover {
+            background-color: #00ccaa;
+        }
+    </style>
+</head>
 <body>
-    <h1>IPCT Satellite Mirror is Online</h1>
-    <p>API Endpoint: <a href="/api/live">/api/live</a></p>
+    <div class="container">
+        <h1>📡 IPCT Uplink Active</h1>
+        <p>The serverless API mirror is successfully running.</p>
+        <a href="/api/live">View Live Cricket Data</a>
+    </div>
 </body>
 </html>
