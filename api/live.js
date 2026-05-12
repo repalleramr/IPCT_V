@@ -7,47 +7,43 @@ module.exports = async function (req, res) {
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+  if (req.method === 'OPTIONS') return res.status(200).end();
 
-  // Direct Match URL
   const MATCH_URL = 'https://www.cricbuzz.com/live-cricket-scores/152119/gt-vs-srh-56th-match-indian-premier-league-2026';
 
   try {
     const { data: html } = await axios.get(MATCH_URL, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-      },
-      timeout: 10000
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      }
     });
 
     const $ = cheerio.load(html);
 
-    // Targetting the specific score area for this match page
-    const matchTitle = $('.cb-nav-hdr').first().text().trim() || 'GT vs SRH';
-    const score = $('.cb-font-20.text-bold').first().text().trim() || $('.cb-min-bat-rw').text().trim();
-    const status = $('.cb-text-live, .cb-text-complete, .cb-min-stts').first().text().trim();
-    const bats1 = $('.cb-min-inf.cb-col-100').first().text().trim();
+    // The Bulletproof Method: Read the Browser Tab Title
+    const pageTitle = $('title').text();
+    let scoreFromTitle = "Fetching Score...";
+    
+    // The title usually looks like: "GT 45/2 (5.3) vs SRH - Live Cricket Score..."
+    if (pageTitle.includes('-')) {
+      scoreFromTitle = pageTitle.split('-')[0].trim();
+    }
+
+    // Try to grab the status text (e.g., "Sunrisers Hyderabad opt to bowl")
+    const liveStatus = $('.cb-text-live, .cb-text-complete').first().text().trim() || "In Progress";
 
     res.status(200).json({
       success: true,
       timestamp: new Date().toISOString(),
       match_info: {
-        title: matchTitle,
-        live_score: score || "Fetching Score...",
-        status: status || "Match in Progress",
-        summary: bats1 || "Waiting for commentary update..."
+        title: "GT vs SRH",
+        live_score: scoreFromTitle,
+        status: liveStatus
       },
-      source: "Direct Uplink"
+      debug_title: pageTitle // This will show us exactly what Vercel sees
     });
 
   } catch (error) {
-    res.status(500).json({ 
-      success: false, 
-      message: "Direct link access failed", 
-      error: error.message 
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 };
