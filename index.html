@@ -1,40 +1,16 @@
-    <h1>IPCT_V Mirror is Live</h1>
-    <p>Data is at <a href="/api/live">/api/live</a></p>
-    ```
-3.  Commit and wait 10 seconds.**Interaction #13**
-**Date/Time:** May 12, 2026 | 07:08 PM
-
----
-
-I checked that specific deployment URL. The reason you are seeing a 404 on that long link is exactly the same as before: **there is no homepage (`index.html`) at the root of your project.**
-
-Vercel is successfully hosting your files, but it doesn't know what to show you when you visit the "main" address. 
-
-### The Real Test
-To see if your work is actually working, you must click this specific link (I added `/api/live` to your deployment URL):
-
-👉 **[Click here to test your API](https://ipct-v2-git-main-r-venkata-rami-reddy-s-projects.vercel.app/api/live)**
-
----
-
-### If that link still shows a 404:
-Then Vercel is not "seeing" your `api` folder. This usually happens if your GitHub repository has an extra folder layer. 
-
-**Go to your GitHub repo `Repalleramr/IPCT_V` and check this immediately:**
-*   When you open the repo, do you see the `api` folder right away? 
-*   **Or** do you see a folder named `IPCT_V`, and you have to click *that* to see the `api` folder?
-
-**If you have to click a folder to find your code, Vercel will fail.** All files (`api` folder, `package.json`) must be at the very top level of the repository.
-
-### How to fix the "Main Site" 404
-To make your main link (`[https://ipct-v2...vercel.app/](https://ipct-v2...vercel.app/)`) work and show something instead of an error, do this:
-
-1.  Create a new file in your GitHub root named **`index.html`**.
-2.  Paste this simple code:
-    ```html
-    <h1>IPCT_V Mirror is Live</h1>
-    <p>Data is at <a href="/api/live">/api/live</a></p>
-    ```
-3.  Commit and wait 10 seconds.
-
-**Does the `/api/live` link show your cricket data now, or are you seeing an error message on that page?**
+<!DOCTYPE html>
+<html>
+<head>
+    <title>IPCT Uplink Mirror</title>
+    <style>
+        body { background: #000; color: #0f0; font-family: monospace; text-align: center; padding-top: 100px; }
+        a { color: #fff; background: #222; padding: 10px; text-decoration: none; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <h1>📡 IPCT SATELLITE UPLINK ACTIVE</h1>
+    <p>Cricbuzz Mirror API is running at the link below:</p>
+    <br>
+    <a href="/api/live">GO TO LIVE DATA FEED</a>
+</body>
+</html>
