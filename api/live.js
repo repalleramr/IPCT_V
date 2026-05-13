@@ -4,11 +4,7 @@ const cheerio = require('cheerio');
 module.exports = async function (req, res) {
 
   res.setHeader('Access-Control-Allow-Origin', '*');
-
-  res.setHeader(
-    'Cache-Control',
-    'no-store'
-  );
+  res.setHeader('Cache-Control', 'no-store');
 
   try {
 
@@ -16,55 +12,65 @@ module.exports = async function (req, res) {
     // GET TEAMS
     // =========================
 
-    let teams =
-      req.query.teams || "";
+    let teams = req.query.teams || '';
+
+    if (
+      !teams &&
+      req.url &&
+      req.url.includes('teams=')
+    ) {
+      teams = decodeURIComponent(
+        req.url.split('teams=')[1]
+          .split('&')[0]
+      );
+    }
 
     if (!teams) {
-
       return res.status(200).json({
-
         success: false,
-
-        error: "No teams provided"
+        error: 'No teams provided'
       });
     }
 
-    teams =
-      teams.toLowerCase();
+    teams = teams.toLowerCase();
 
     // =========================
-    // IPL PAGE
+    // TEAM ALIASES
+    // =========================
+
+    const aliases = {
+      'mumbai indians': ['mi', 'mumbai'],
+      'chennai super kings': ['csk', 'chennai'],
+      'royal challengers bengaluru': ['rcb', 'bengaluru', 'bangalore'],
+      'kolkata knight riders': ['kkr', 'kolkata'],
+      'delhi capitals': ['dc', 'delhi'],
+      'gujarat titans': ['gt', 'gujarat'],
+      'lucknow super giants': ['lsg', 'lucknow'],
+      'punjab kings': ['pbks', 'punjab'],
+      'rajasthan royals': ['rr', 'rajasthan'],
+      'sunrisers hyderabad': ['srh', 'hyderabad', 'sunrisers']
+    };
+
+    // =========================
+    // FIND MATCH URL FROM IPL PAGE
     // =========================
 
     const IPL_URL =
       'https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches';
 
-    const page =
-      await axios.get(
+    const page = await axios.get(
+      IPL_URL,
+      {
+        headers: {
+          'User-Agent': 'Mozilla/5.0'
+        },
+        timeout: 10000
+      }
+    );
 
-        IPL_URL,
+    const $ = cheerio.load(page.data);
 
-        {
-
-          headers: {
-
-            'User-Agent':
-              'Mozilla/5.0'
-          },
-
-          timeout: 10000
-        }
-      );
-
-    const $ =
-      cheerio.load(page.data);
-
-    let matchUrl =
-      null;
-
-    // =========================
-    // FIND MATCH
-    // =========================
+    let matchUrl = null;
 
     $('a').each((i, el) => {
 
@@ -80,25 +86,33 @@ module.exports = async function (req, res) {
         href.includes('/live-cricket-scores/')
       ) {
 
-        const t =
-          teams.split(' vs ');
+        const t = teams.split(' vs ');
 
         if (t.length >= 2) {
 
           const t1 =
-            t[0]
-              .trim()
-              .split(' ')[0];
+            t[0].trim().toLowerCase();
 
           const t2 =
-            t[1]
-              .trim()
-              .split(' ')[0];
+            t[1].trim().toLowerCase();
 
-          if (
-            text.includes(t1) &&
-            text.includes(t2)
-          ) {
+          const t1Aliases =
+            aliases[t1] || [t1];
+
+          const t2Aliases =
+            aliases[t2] || [t2];
+
+          const hasT1 =
+            t1Aliases.some(a =>
+              text.includes(a)
+            );
+
+          const hasT2 =
+            t2Aliases.some(a =>
+              text.includes(a)
+            );
+
+          if (hasT1 && hasT2) {
 
             matchUrl =
               'https://www.cricbuzz.com' +
@@ -110,18 +124,10 @@ module.exports = async function (req, res) {
       }
     });
 
-    // =========================
-    // MATCH NOT FOUND
-    // =========================
-
     if (!matchUrl) {
-
       return res.status(200).json({
-
         success: false,
-
-        error:
-          'Match not found'
+        error: 'IPL match not found'
       });
     }
 
@@ -140,126 +146,178 @@ module.exports = async function (req, res) {
         : null;
 
     if (!matchId) {
-
       return res.status(200).json({
-
         success: false,
-
-        error:
-          'Match ID missing'
+        error: 'Match ID missing'
       });
     }
 
     // =========================
-    // COMMENTARY API
+    // DEFAULT VALUES
     // =========================
 
-    const commentaryUrl =
-      `https://www.cricbuzz.com/api/cricket-match/commentary/${matchId}`;
+    let liveScore = 'Match not started';
+    let overs = '0.0';
+    let striker = 'Unavailable';
+    let nonStriker = 'Unavailable';
+    let bowler = 'Unavailable';
+    let lastBall = '-';
+    let lastOver = [];
+    let status = 'Live';
+    let source = 'none';
 
-    const commentary =
-      await axios.get(
+    // ==================================================
+    // PRIMARY SOURCE : CRICBUZZ COMMENTARY API
+    // ==================================================
 
-        commentaryUrl,
+    try {
 
-        {
+      const commentaryUrl =
+        `https://www.cricbuzz.com/api/cricket-match/commentary/${matchId}`;
 
-          headers: {
+      const commentary =
+        await axios.get(
+          commentaryUrl,
+          {
+            headers: {
+              'User-Agent': 'Mozilla/5.0',
+              'Accept': 'application/json'
+            },
+            timeout: 10000
+          }
+        );
 
-            'User-Agent':
-              'Mozilla/5.0',
+      const data = commentary.data;
 
-            'Accept':
-              'application/json'
-          },
+      if (
+        data &&
+        data.commentaryList &&
+        data.commentaryList.length
+      ) {
 
-          timeout: 10000
+        const latest =
+          data.commentaryList[0] || {};
+
+        liveScore =
+          latest.score ||
+          liveScore;
+
+        overs =
+          latest.overNumber ||
+          overs;
+
+        striker =
+          latest.batsmanStriker ||
+          striker;
+
+        nonStriker =
+          latest.batsmanNonStriker ||
+          nonStriker;
+
+        bowler =
+          latest.bowler ||
+          bowler;
+
+        lastBall =
+          latest.event ||
+          lastBall;
+
+        if (latest.overSummary) {
+          lastOver =
+            latest.overSummary.split(' ');
         }
-      );
 
-    const data =
-      commentary.data;
+        status =
+          data.matchHeader?.status ||
+          status;
 
-    // =========================
-    // SAFETY
-    // =========================
+        source = 'cricbuzz';
+      }
+
+    }
+    catch (e) {
+
+      // Cricbuzz failed silently
+    }
+
+    // ==================================================
+    // FALLBACK SOURCE : CREX SCRAPER
+    // ==================================================
 
     if (
-      !data ||
-      !data.commentaryList
+      source === 'none' ||
+      liveScore === 'Match not started'
     ) {
 
-      return res.status(200).json({
+      try {
 
-        success: false,
+        const crexSearch =
+          await axios.get(
+            'https://crex.live',
+            {
+              headers: {
+                'User-Agent': 'Mozilla/5.0'
+              },
+              timeout: 10000
+            }
+          );
 
-        error:
-          'No commentary data'
-      });
+        const $c =
+          cheerio.load(crexSearch.data);
+
+        let found = false;
+
+        $('body *').each((i, el) => {
+
+          if (found) return false;
+
+          const txt =
+            $c(el)
+              .text()
+              .trim();
+
+          const scoreMatch =
+            txt.match(
+              /\d{1,3}\/\d{1,2}/
+            );
+
+          if (
+            scoreMatch &&
+            scoreMatch[0]
+          ) {
+
+            const score =
+              scoreMatch[0];
+
+            const runs =
+              parseInt(
+                score.split('/')[0]
+              );
+
+            if (
+              runs > 20 &&
+              runs < 300
+            ) {
+
+              liveScore = score;
+              found = true;
+              source = 'crex';
+            }
+          }
+        });
+
+      }
+      catch (e) {
+
+        // Crex failed silently
+      }
     }
 
     // =========================
-    // LATEST BALL
+    // PREDICTION ENGINE
     // =========================
 
-    const latest =
-      data.commentaryList[0] || {};
-
-    // =========================
-    // LIVE VALUES
-    // =========================
-
-    const liveScore =
-      latest.score ||
-      'Match not started';
-
-    const overs =
-      latest.overNumber ||
-      '0.0';
-
-    const striker =
-      latest.batsmanStriker ||
-      'Unavailable';
-
-    const nonStriker =
-      latest.batsmanNonStriker ||
-      'Unavailable';
-
-    const bowler =
-      latest.bowler ||
-      'Unavailable';
-
-    const lastBall =
-      latest.event ||
-      '-';
-
-    let lastOver =
-      [];
-
-    if (
-      latest.overSummary
-    ) {
-
-      lastOver =
-        latest.overSummary
-          .split(' ');
-    }
-
-    // =========================
-    // STATUS
-    // =========================
-
-    const status =
-      data.matchHeader
-        ?.status ||
-      'Live';
-
-    // =========================
-    // PREDICTION
-    // =========================
-
-    let prediction =
-      'Balanced';
+    let prediction = 'Balanced';
 
     if (
       typeof liveScore === 'string' &&
@@ -272,17 +330,14 @@ module.exports = async function (req, res) {
         );
 
       if (runs >= 200) {
-
         prediction =
           'Batting side dominant';
       }
       else if (runs >= 170) {
-
         prediction =
           'Batting side slight edge';
       }
       else if (runs <= 140) {
-
         prediction =
           'Bowling pressure building';
       }
@@ -299,8 +354,6 @@ module.exports = async function (req, res) {
       match_info: {
 
         title:
-          data.matchHeader
-            ?.matchDescription ||
           'IPL LIVE INTEL',
 
         live_score:
@@ -329,6 +382,9 @@ module.exports = async function (req, res) {
 
         prediction:
           prediction,
+
+        source:
+          source,
 
         source_url:
           matchUrl
