@@ -2,10 +2,13 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 
 module.exports = async function (req, res) {
-  // CORS Setup
+  // CORS & ANTI-CACHE ARMOR (Forces phone to fetch fresh data every time)
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
@@ -61,11 +64,10 @@ module.exports = async function (req, res) {
     const t2A = teamAliases[team2] || [team2];
 
     // --- PHASE 1: THE MULTI-NODE ARCHIVAL SCANNER ---
-    // Added Historical Archive nodes to guarantee older test matches are found
     const pagesToScan = [
-        'https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches', // Active Mission Data
-        'https://www.cricbuzz.com/cricket-series/7607/indian-premier-league-2024/matches', // Deep Historical Archive (For testing)
-        'https://www.cricbuzz.com/cricket-match/live-scores/recent-matches', // Global Recent Masterlist
+        'https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches', // Active
+        'https://www.cricbuzz.com/cricket-match/live-scores/recent-matches', // Recent Archive
+        'https://www.cricbuzz.com/cricket-series/7607/indian-premier-league-2024/matches', // Deep Archive Testing
         'https://www.cricbuzz.com/' // Root Failsafe
     ];
 
@@ -91,7 +93,7 @@ module.exports = async function (req, res) {
                 }
             });
         } catch (err) {
-            // Silently move to the next archive node if one is inaccessible
+            // Silently move to the next archive node
         }
     }
 
@@ -118,7 +120,8 @@ module.exports = async function (req, res) {
     const { data: matchHtml } = await axios.get(commUrl, { headers });
     const $m = cheerio.load(matchHtml);
 
-    let statusText = $m('.cb-text-complete, .cb-text-live, .cb-min-stts, .cb-text-preview, .cb-nav-subhdr').first().text().trim();
+    // Added .cb-status-msg to catch deeply archived match results
+    let statusText = $m('.cb-text-complete, .cb-status-msg, .cb-text-live, .cb-min-stts, .cb-text-preview, .cb-nav-subhdr').first().text().trim();
     if (!statusText) statusText = $m('.text-gray').first().text().trim() || "Status Unknown";
 
     let pageTitle = $m('title').text();
@@ -147,17 +150,18 @@ module.exports = async function (req, res) {
     }
 
     // --- PHASE 3: ORACLE LOGIC & OUTPUT ---
-    let isComplete = $m('.cb-text-complete').length > 0 || statusText.toLowerCase().includes('won by') || statusText.toLowerCase().includes('result');
+    // Added 'beat' and targeted .cb-status-msg to ensure completed matches are recognized
+    let isComplete = $m('.cb-text-complete').length > 0 || $m('.cb-status-msg').length > 0 || statusText.toLowerCase().includes('won by') || statusText.toLowerCase().includes('result') || statusText.toLowerCase().includes('beat');
     let isUpcoming = scoreStr === "Pre-Match Intel";
     let predStr = "Waiting for Toss";
 
-    if (isUpcoming) {
-        bowlerStr = "Toss Pending / Countdown Active";
-    } else if (isComplete) {
+    if (isComplete) {
         bowlerStr = "Match Concluded";
         predStr = "Mission Accomplished";
         scoreStr = "Match Ended";
         if (ballHistory.length === 0) ballHistory = ["E", "N", "D"];
+    } else if (isUpcoming) {
+        bowlerStr = "Toss Pending / Countdown Active";
     } else if (ballHistory.length > 0) {
         let runs = 0, wkts = 0;
         ballHistory.slice(0, 6).forEach(b => {
