@@ -19,16 +19,10 @@ module.exports = async function (req, res) {
   targetTeams = targetTeams.replace(/\+/g, ' ').trim();
 
   const teamAliases = {
-    "chennai": ["csk", "chennai"],
-    "delhi": ["dc", "delhi"],
-    "gujarat": ["gt", "gujarat"],
-    "kolkata": ["kkr", "kolkata"],
-    "lucknow": ["lsg", "lucknow"],
-    "mumbai": ["mi", "mumbai"],
-    "punjab": ["pbks", "punjab"],
-    "rajasthan": ["rr", "rajasthan"],
-    "royal": ["rcb", "royal", "bengaluru", "bangalore"],
-    "sunrisers": ["srh", "sunrisers"]
+    "chennai": ["csk", "chennai"], "delhi": ["dc", "delhi"], "gujarat": ["gt", "gujarat"],
+    "kolkata": ["kkr", "kolkata"], "lucknow": ["lsg", "lucknow"], "mumbai": ["mi", "mumbai"],
+    "punjab": ["pbks", "punjab"], "rajasthan": ["rr", "rajasthan"],
+    "royal": ["rcb", "royal", "bengaluru", "bangalore"], "sunrisers": ["srh", "sunrisers"]
   };
 
   try {
@@ -37,8 +31,6 @@ module.exports = async function (req, res) {
     const $series = cheerio.load(seriesHtml);
 
     let activeMatchUrl = null;
-    let matchState = "upcoming";
-    let matchStatusText = "Upcoming Match";
 
     const team1 = targetTeams.split(' vs ')[0] ? targetTeams.split(' vs ')[0].trim().split(' ')[0] : "";
     const team2 = targetTeams.split(' vs ')[1] ? targetTeams.split(' vs ')[1].trim().split(' ')[0] : "";
@@ -47,60 +39,34 @@ module.exports = async function (req, res) {
 
     const hasAlias = (txt, aliases) => aliases.some(a => a && txt.includes(a));
 
+    // PHASE 1: Find the Match URL on the Series Page
     $series('.cb-series-matches').each((i, el) => {
       const text = $series(el).text().toLowerCase();
-
       if (targetTeams && hasAlias(text, t1A) && hasAlias(text, t2A)) {
         const href = $series(el).find('a[href*="cricket-score"]').first().attr('href');
-        if (href) activeMatchUrl = href.startsWith('http') ? href : 'https://www.cricbuzz.com' + href;
-
-        if ($series(el).find('.cb-text-complete').length > 0 || text.includes('won by')) {
-          matchState = "complete";
-          matchStatusText = $series(el).find('.cb-text-complete').first().text().trim() || "Match Ended";
-        } else if ($series(el).find('.cb-text-live').length > 0) {
-          matchState = "live";
-          matchStatusText = $series(el).find('.cb-text-live').first().text().trim();
-        } else {
-          matchState = "upcoming";
-          matchStatusText = $series(el).find('.cb-text-preview, .text-gray').first().text().trim() || "Match Starting Soon";
+        if (href) {
+            activeMatchUrl = href.startsWith('http') ? href : 'https://www.cricbuzz.com' + href;
+            return false;
         }
-        return false;
       }
     });
 
-    // --- STATE 1: UPCOMING ---
-    if (!activeMatchUrl || matchState === "upcoming") {
+    if (!activeMatchUrl) {
       return res.status(200).json({
         success: true,
         match_info: {
           title: "IPCT STANDBY",
           live_score: "Pre-Match Intel",
-          status: matchStatusText,
+          status: "Target Not Found in Schedule",
           bowler: "N/A",
           last_balls: [],
-          prediction: "Waiting for Toss"
+          prediction: "Awaiting Schedule Sync"
         },
         target: SERIES_URL
       });
     }
 
-    // --- STATE 2: COMPLETED ---
-    if (matchState === "complete") {
-      return res.status(200).json({
-        success: true,
-        match_info: {
-          title: "MISSION ACCOMPLISHED",
-          live_score: "Match Finalized",
-          status: matchStatusText,
-          bowler: "Data Archived",
-          last_balls: ["E", "N", "D", "E", "D"],
-          prediction: "Match Finished"
-        },
-        target: activeMatchUrl
-      });
-    }
-
-    // --- STATE 3: LIVE ---
+    // PHASE 2: FORCE SCRAPE THE ACTUAL MATCH PAGE (Never return early!)
     let commUrl = activeMatchUrl;
     if (commUrl.includes('/cricket-scores/')) {
       commUrl = commUrl.replace('/cricket-scores/', '/live-cricket-scores/');
@@ -111,32 +77,74 @@ module.exports = async function (req, res) {
     const { data: matchHtml } = await axios.get(commUrl, { headers });
     const $ = cheerio.load(matchHtml);
 
+    // 1. Exact Status / Countdown / Result from the page
+    let statusText = $('.cb-text-complete, .cb-text-live, .cb-text-preview, .cb-min-stts').first().text().trim();
+    if (!statusText) {
+         statusText = $('.text-gray').first().text().trim() || "Status Unknown";
+    }
+
+    // 2. Exact Score
+    let pageTitle = $('title').text();
+    let scoreStr = pageTitle.split('-')[0].split('|')[0].trim();
+    
+    // Mask the title if the match hasn't started (contains "vs" instead of numbers)
+    if (scoreStr.toLowerCase().includes(' vs ')) {
+        scoreStr = "Pre-Match Intel"; 
+    }
+
+    // 3. Ball History
     let ballHistory = [];
     $('.cb-col-10.cb-font-12, .cb-col.cb-col-8.cb-mtch-blt').each((i, el) => {
       if (i < 12) ballHistory.push($(el).text().trim());
     });
 
-    const lastCount = Math.min(6, ballHistory.length);
-    let runs = 0, wkts = 0;
-    ballHistory.slice(0, lastCount).forEach(b => {
-      if (b === 'W') wkts++;
-      else if (!isNaN(b)) runs += parseInt(b);
-    });
+    // 4. Bowler / Active Info
+    let bowlerStr = "N/A";
+    const bRow = $('.cb-min-bwl-rw').first();
+    if (bRow.length > 0) {
+        const name = bRow.find('a').first().text().trim();
+        const stats = bRow.text().replace(name, '').replace(/\s+/g, ' ').trim();
+        if (name) bowlerStr = `${name} (${stats})`;
+    } else {
+        const bStats = $('.cb-col-50').filter((i, e) => $(e).text().toLowerCase().includes('ov')).first();
+        if (bStats.length > 0) {
+            const bName = bStats.prev().text().trim();
+            if (bName) bowlerStr = bName + " (Active)";
+        }
+    }
 
-    let pred = runs > 12 ? "AGGRESSIVE: Momentum with Bat."
-      : (wkts > 0 ? "CAUTION: Wicket Pattern Detected."
-      : "STABLE: Standard Play.");
+    // PHASE 3: STATE POLISH (Final Output Generation)
+    let isComplete = $('.cb-text-complete').length > 0 || statusText.toLowerCase().includes('won by');
+    let isUpcoming = scoreStr === "Pre-Match Intel";
+    let predStr = "Waiting for Toss";
+
+    if (isUpcoming) {
+        bowlerStr = "Toss Pending";
+    } else if (isComplete) {
+        bowlerStr = "Match Concluded";
+        predStr = "Match Ended";
+        if (ballHistory.length === 0) ballHistory = ["E", "N", "D"];
+    } else if (ballHistory.length > 0) {
+        let runs = 0, wkts = 0;
+        ballHistory.slice(0, 6).forEach(b => {
+          if (b === 'W') wkts++;
+          else if (!isNaN(b)) runs += parseInt(b);
+        });
+        predStr = runs > 12 ? "AGGRESSIVE: Momentum with Bat."
+          : (wkts > 0 ? "CAUTION: Wicket Pattern Detected."
+          : "STABLE: Standard Play.");
+    }
 
     return res.status(200).json({
       success: true,
       timestamp: new Date().toISOString(),
       match_info: {
-        title: "IPCT TARGET LOCKED",
-        live_score: $('title').text().split('|')[0].trim(),
-        status: $('.cb-text-live, .cb-min-stts').first().text().trim() || matchStatusText,
-        bowler: $('.cb-min-bwl-rw').first().find('a').first().text().trim() || "N/A",
+        title: isComplete ? "MISSION ACCOMPLISHED" : "IPCT TARGET LOCKED",
+        live_score: scoreStr,
+        status: statusText, // This will now grab the EXACT countdown or exact "Team won by" result!
+        bowler: bowlerStr,
         last_balls: ballHistory,
-        prediction: pred
+        prediction: predStr
       },
       target: commUrl
     });
