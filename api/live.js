@@ -9,15 +9,34 @@ module.exports = async function (req, res) {
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
+  // 1. BULLETPROOF URL PARSER
   let targetTeams = "";
-  if (req.query && req.query.teams) {
-    targetTeams = String(req.query.teams).toLowerCase();
-  } else if (req.url && req.url.includes('teams=')) {
-    targetTeams = decodeURIComponent(req.url.split('teams=')[1].split('&')[0]).toLowerCase();
-  }
-  targetTeams = targetTeams.replace(/\+/g, ' ').trim();
+  try {
+      if (req.query && req.query.teams) {
+          targetTeams = req.query.teams;
+      } else if (req.url && req.url.includes('teams=')) {
+          targetTeams = decodeURIComponent(req.url.split('teams=')[1].split('&')[0]);
+      }
+      targetTeams = String(targetTeams).toLowerCase().replace(/\+/g, ' ').trim();
+  } catch (e) {}
 
-  // IPCT Alias Dictionary (Added extra generic identifiers)
+  // 2. BLANK TRANSMISSION DETECTOR
+  if (!targetTeams || targetTeams === "undefined" || targetTeams === "null" || targetTeams === "vs") {
+      return res.status(200).json({
+          success: true,
+          match_info: {
+              title: "IPCT ERROR",
+              live_score: "Uplink Failed",
+              status: "No Teams Received from App",
+              bowler: "N/A",
+              last_balls: [],
+              prediction: "Please re-select from Dropdown"
+          },
+          target: "https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches"
+      });
+  }
+
+  // IPCT Alias Dictionary
   const teamAliases = {
     "chennai": ["csk", "chennai"],
     "delhi": ["dc", "delhi"],
@@ -34,11 +53,12 @@ module.exports = async function (req, res) {
   try {
     const headers = { 
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
     };
     
-    const team1 = targetTeams.split(' vs ')[0] ? targetTeams.split(' vs ')[0].trim().split(' ')[0] : "";
-    const team2 = targetTeams.split(' vs ')[1] ? targetTeams.split(' vs ')[1].trim().split(' ')[0] : "";
+    // Parse the two teams securely
+    let team1 = targetTeams.split(' vs ')[0] ? targetTeams.split(' vs ')[0].trim().split(' ')[0] : "";
+    let team2 = targetTeams.split(' vs ')[1] ? targetTeams.split(' vs ')[1].trim().split(' ')[0] : "";
+
     const t1A = teamAliases[team1] || [team1];
     const t2A = teamAliases[team2] || [team2];
 
@@ -49,7 +69,7 @@ module.exports = async function (req, res) {
     const { data: seriesHtml } = await axios.get(SERIES_URL, { headers });
     const $series = cheerio.load(seriesHtml);
 
-    // 1. Scan the text of the entire match blocks first (Highly accurate)
+    // Scan text blocks
     $series('.cb-series-matches, .cb-col-100, .cb-mtch-lst-rt').each((i, el) => {
       const text = $series(el).text().toLowerCase();
       const matchT1 = t1A.some(a => a && text.includes(a));
@@ -64,7 +84,7 @@ module.exports = async function (req, res) {
       }
     });
 
-    // 2. If blocks fail, scan EVERY SINGLE link on the page and its text (The Failsafe)
+    // Failsafe Link Scanner
     if (!activeMatchUrl) {
       $series('a').each((i, el) => {
         const href = $series(el).attr('href') || "";
@@ -90,7 +110,7 @@ module.exports = async function (req, res) {
           status: "Match Not Found in Matrix",
           bowler: "N/A",
           last_balls: [],
-          prediction: `Checked for: ${t1A[0]} vs ${t2A[0]}`
+          prediction: `Scanned for: ${t1A[0]} & ${t2A[0]}`
         },
         target: SERIES_URL
       });
