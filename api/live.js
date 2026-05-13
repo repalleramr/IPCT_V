@@ -9,6 +9,7 @@ module.exports = async function (req, res) {
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
+  // The master series page you provided
   const SERIES_URL = 'https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches';
 
   // Read the Target Teams sent from your Android App
@@ -27,87 +28,80 @@ module.exports = async function (req, res) {
     
     let activeMatchUrl = null;
     let matchState = "unknown"; 
-    let fallbackResult = "";
+    let fallbackResult = "Awaiting match timing...";
 
-    // --- PHASE 1: UNBREAKABLE 4-LETTER TARGET MATCHING ---
+    // --- PHASE 1: SERIES PAGE SCANNING ---
     if (targetTeams) {
         const teamParts = targetTeams.split(' vs ').map(t => t.trim());
-        // Grab just the first 4 letters to bypass "Bengaluru" vs "Bangalore" spelling issues
         const t1 = teamParts[0] ? teamParts[0].substring(0, 4) : ""; 
         const t2 = teamParts[1] ? teamParts[1].substring(0, 4) : ""; 
 
         $series('.cb-col-100, .cb-series-matches').each((i, el) => {
             const text = $series(el).text().toLowerCase();
             
-            // If the block contains both 4-letter team identifiers
+            // If the block contains your targeted teams
             if (t1 && text.includes(t1) && (!t2 || text.includes(t2))) {
                 const link = $series(el).find('a[href*="cricket-score"]').first().attr('href');
                 
-                if (link) {
-                    activeMatchUrl = link;
-                    
-                    // Determine Match State directly from the series page
-                    if ($series(el).find('.cb-text-complete').length > 0 || text.includes('won by') || text.includes('result')) {
-                        matchState = "complete";
-                    } else if ($series(el).find('.cb-text-live').length > 0) {
-                        matchState = "live";
-                    } else {
-                        matchState = "upcoming";
-                    }
-                    
-                    // Grab the text containing the time or result
-                    fallbackResult = $series(el).find('.cb-text-complete').text().trim() || $series(el).find('.cb-text-preview').text().trim();
-                    
-                    return false; // Target Locked
+                // Determine exactly what state the match is in
+                if ($series(el).find('.cb-text-complete').length > 0 || text.includes('won by') || text.includes('result')) {
+                    matchState = "complete";
+                    fallbackResult = $series(el).find('.cb-text-complete').text().trim() || "Match Ended";
+                } else if ($series(el).find('.cb-text-live').length > 0) {
+                    matchState = "live";
+                    fallbackResult = "In Progress";
+                } else {
+                    matchState = "upcoming";
+                    // Grab the match timing/date directly from the series page
+                    fallbackResult = $series(el).find('.cb-text-preview').text().trim() || "Match Starting Soon";
                 }
+
+                if (link) {
+                    activeMatchUrl = link.startsWith('http') ? link : 'https://www.cricbuzz.com' + link;
+                }
+                
+                return false; // Break loop
             }
         });
     }
 
-    // --- PHASE 2: ERROR HANDLING ---
-    if (!activeMatchUrl) {
+    // --- PHASE 2: YOUR REQUESTED LOGIC ---
+    // If no match has started, target the Series Link and return the timing!
+    if (!activeMatchUrl || matchState === "upcoming" || matchState === "unknown") {
         return res.status(200).json({
           success: true,
-          match_info: { 
-              title: "TARGET NOT FOUND", 
-              live_score: "Teams not found on Cricbuzz schedule.", 
-              status: "Check Dropdown Teams", 
-              bowler: "N/A" 
-          }
+          timestamp: new Date().toISOString(),
+          match_info: {
+            title: "STANDBY MODE",
+            live_score: "Awaiting First Ball",
+            status: fallbackResult !== "Awaiting match timing..." ? fallbackResult : "Check Dropdown Teams",
+            bowler: "Toss Pending / N/A"
+          },
+          target: SERIES_URL // Safe fallback to the series page
         });
     }
 
-    if (!activeMatchUrl.startsWith('http')) activeMatchUrl = 'https://www.cricbuzz.com' + activeMatchUrl;
-
-    // Force Live URL format to ensure we can read live data if the match just started
+    // --- PHASE 3: MATCH HAS STARTED (Live or Ended) ---
+    // Target the specific Match Link as requested
     if (activeMatchUrl.includes('/cricket-scores/') && !activeMatchUrl.includes('/live-cricket-scores/')) {
         activeMatchUrl = activeMatchUrl.replace('/cricket-scores/', '/live-cricket-scores/');
     }
 
-    // --- PHASE 3: DATA EXTRACTION & FORMATTING ---
     const { data: matchHtml } = await axios.get(activeMatchUrl, { headers });
     const $ = cheerio.load(matchHtml);
 
     const pageTitle = $('title').text();
     let scoreFromTitle = pageTitle.includes('-') ? pageTitle.split('-')[0].trim() : pageTitle;
     let bInfo = "N/A";
-    let finalStatus = $('.cb-text-complete, .cb-text-live, .cb-text-preview').first().text().trim() || fallbackResult;
+    let finalStatus = $('.cb-text-complete, .cb-text-live, .cb-min-stts').first().text().trim() || fallbackResult;
 
-    // --- DYNAMIC OUTPUT CONTROL ---
     if (matchState === "complete" || finalStatus.toLowerCase().includes('won by') || finalStatus.toLowerCase().includes('result')) {
-        // MATCH ENDED
+        // Show result for ended matches
         scoreFromTitle = finalStatus; 
         finalStatus = "Match Ended";
         bInfo = "Mission Accomplished";
-    } 
-    else if (matchState === "upcoming" || finalStatus.toLowerCase().includes('time') || finalStatus.toLowerCase().includes('start')) {
-        // MATCH NOT STARTED
-        scoreFromTitle = finalStatus; 
-        finalStatus = "Awaiting First Ball";
-        bInfo = "Toss/Assets Pending...";
-    } 
-    else {
-        // MATCH IS LIVE
+    } else {
+        // Scrape Live Bowler
         const bRow = $('.cb-min-bwl-rw').first();
         if (bRow.length > 0) {
             const name = bRow.find('a').first().text().trim();
@@ -131,7 +125,7 @@ module.exports = async function (req, res) {
         status: finalStatus,
         bowler: bInfo
       },
-      target: activeMatchUrl
+      target: activeMatchUrl // Targets the live match link!
     });
 
   } catch (error) {
