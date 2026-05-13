@@ -3,21 +3,36 @@ const cheerio = require('cheerio');
 
 module.exports = async function (req, res) {
 
+  // =========================
+  // HEADERS
+  // =========================
+
   res.setHeader('Access-Control-Allow-Origin', '*');
 
   res.setHeader(
     'Cache-Control',
-    'no-store'
+    'no-store, max-age=0'
   );
 
   try {
 
-    // =====================
-    // GET TEAM QUERY
-    // =====================
+    // =========================
+    // GET TEAMS
+    // =========================
 
-    let teams =
-      req.query.teams || "";
+    let teams = req.query.teams || "";
+
+    if (
+      !teams &&
+      req.url &&
+      req.url.includes('teams=')
+    ) {
+
+      teams = decodeURIComponent(
+        req.url.split('teams=')[1]
+          .split('&')[0]
+      );
+    }
 
     if (!teams) {
 
@@ -29,12 +44,48 @@ module.exports = async function (req, res) {
       });
     }
 
-    teams =
-      teams.toLowerCase();
+    teams = teams.toLowerCase();
 
-    // =====================
-    // IPL PAGE ONLY
-    // =====================
+    // =========================
+    // TEAM ALIASES
+    // =========================
+
+    const aliases = {
+
+      "mumbai indians":
+        ["mi", "mumbai"],
+
+      "chennai super kings":
+        ["csk", "chennai"],
+
+      "royal challengers bengaluru":
+        ["rcb", "bengaluru", "bangalore"],
+
+      "kolkata knight riders":
+        ["kkr", "kolkata"],
+
+      "delhi capitals":
+        ["dc", "delhi"],
+
+      "gujarat titans":
+        ["gt", "gujarat"],
+
+      "lucknow super giants":
+        ["lsg", "lucknow"],
+
+      "punjab kings":
+        ["pbks", "punjab"],
+
+      "rajasthan royals":
+        ["rr", "rajasthan"],
+
+      "sunrisers hyderabad":
+        ["srh", "hyderabad", "sunrisers"]
+    };
+
+    // =========================
+    // IPL PAGE
+    // =========================
 
     const IPL_URL =
       'https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches';
@@ -61,9 +112,9 @@ module.exports = async function (req, res) {
 
     let matchUrl = null;
 
-    // =====================
-    // FIND MATCH LINK
-    // =====================
+    // =========================
+    // FIND MATCH
+    // =========================
 
     $('a').each((i, el) => {
 
@@ -85,19 +136,28 @@ module.exports = async function (req, res) {
         if (t.length >= 2) {
 
           const t1 =
-            t[0]
-              .trim()
-              .split(' ')[0];
+            t[0].trim().toLowerCase();
 
           const t2 =
-            t[1]
-              .trim()
-              .split(' ')[0];
+            t[1].trim().toLowerCase();
 
-          if (
-            text.includes(t1) &&
-            text.includes(t2)
-          ) {
+          const t1Aliases =
+            aliases[t1] || [t1];
+
+          const t2Aliases =
+            aliases[t2] || [t2];
+
+          const hasT1 =
+            t1Aliases.some(a =>
+              text.includes(a)
+            );
+
+          const hasT2 =
+            t2Aliases.some(a =>
+              text.includes(a)
+            );
+
+          if (hasT1 && hasT2) {
 
             matchUrl =
               'https://www.cricbuzz.com' +
@@ -109,9 +169,9 @@ module.exports = async function (req, res) {
       }
     });
 
-    // =====================
+    // =========================
     // MATCH NOT FOUND
-    // =====================
+    // =========================
 
     if (!matchUrl) {
 
@@ -123,9 +183,23 @@ module.exports = async function (req, res) {
       });
     }
 
-    // =====================
+    // =========================
+    // MATCH ID
+    // =========================
+
+    const idMatch =
+      matchUrl.match(
+        /live-cricket-scores\/(\d+)/
+      );
+
+    const matchId =
+      idMatch
+        ? idMatch[1]
+        : null;
+
+    // =========================
     // FETCH MATCH PAGE
-    // =====================
+    // =========================
 
     const match =
       await axios.get(
@@ -146,123 +220,96 @@ module.exports = async function (req, res) {
 
     const html =
       match.data;
-// =====================
-// SCORE DETECTION
-// =====================
-
-let score = 'Score unavailable';
-
-// Try visible scoreboard text
-const possibleSelectors = [
-
-  '.cb-min-bat-rw',
-
-  '.cb-font-20',
-
-  '.cb-scrs-wrp',
-
-  '.cb-col-100',
-
-  '.cb-lv-scrs-col',
-
-  '.cb-text-live'
-];
-
-for (const sel of possibleSelectors) {
-
-  const txt =
-    $m(sel)
-      .text()
-      .trim();
-
-  const found =
-    txt.match(
-      /\d{2,3}\/\d{1,2}/
-    );
-
-  if (found) {
-
-    score = found[0];
-
-    break;
-  }
-}
-
-// FINAL FALLBACK
-if (score === 'Score unavailable') {
-
-  const bodyText =
-    $m('body')
-      .text()
-      .replace(/\s+/g, ' ');
-
-  const allScores =
-    bodyText.match(
-      /\d{2,3}\/\d{1,2}/g
-    );
-
-  if (
-    allScores &&
-    allScores.length
-  ) {
-
-    // choose realistic highest score
-    score =
-      allScores.sort((a, b) => {
-
-        return (
-          parseInt(
-            b.split('/')[0]
-          ) -
-
-          parseInt(
-            a.split('/')[0]
-          )
-        );
-
-      })[0];
-  }
-}
-    // =====================
-    // SCORE REGEX
-    // =====================
-
-    const scores =
-      html.match(
-        /\b\d{2,3}\/\d{1,2}\b/g
-      );
-
-    let score =
-      "Score unavailable";
-
-    if (
-      scores &&
-      scores.length
-    ) {
-
-      // choose highest score
-      score =
-        scores.sort((a, b) => {
-
-          return (
-            parseInt(
-              b.split('/')[0]
-            ) -
-
-            parseInt(
-              a.split('/')[0]
-            )
-          );
-
-        })[0];
-    }
-
-    // =====================
-    // STATUS
-    // =====================
 
     const $m =
       cheerio.load(html);
+
+    // =========================
+    // SCORE
+    // =========================
+
+    let score =
+      'Score unavailable';
+
+    const possibleSelectors = [
+
+      '.cb-min-bat-rw',
+
+      '.cb-font-20',
+
+      '.cb-scrs-wrp',
+
+      '.cb-col-100',
+
+      '.cb-lv-scrs-col',
+
+      '.cb-text-live'
+    ];
+
+    for (const sel of possibleSelectors) {
+
+      const txt =
+        $m(sel)
+          .text()
+          .trim();
+
+      const found =
+        txt.match(
+          /\d{2,3}\/\d{1,2}/
+        );
+
+      if (found) {
+
+        score = found[0];
+
+        break;
+      }
+    }
+
+    // =========================
+    // FALLBACK SCORE
+    // =========================
+
+    if (
+      score ===
+      'Score unavailable'
+    ) {
+
+      const bodyText =
+        $m('body')
+          .text()
+          .replace(/\s+/g, ' ');
+
+      const allScores =
+        bodyText.match(
+          /\d{2,3}\/\d{1,2}/g
+        );
+
+      if (
+        allScores &&
+        allScores.length
+      ) {
+
+        score =
+          allScores.sort((a, b) => {
+
+            return (
+              parseInt(
+                b.split('/')[0]
+              ) -
+
+              parseInt(
+                a.split('/')[0]
+              )
+            );
+
+          })[0];
+      }
+    }
+
+    // =========================
+    // STATUS
+    // =========================
 
     let status =
       'Live';
@@ -273,7 +320,9 @@ if (score === 'Score unavailable') {
 
       '.cb-status-msg',
 
-      '.cb-text-complete'
+      '.cb-text-complete',
+
+      '.cb-mini-status'
     ];
 
     for (const sel of statusSelectors) {
@@ -292,14 +341,111 @@ if (score === 'Score unavailable') {
       }
     }
 
-    // =====================
-    // SIMPLE PREDICTION
-    // =====================
+    // =========================
+    // COMMENTARY
+    // =========================
+
+    let striker =
+      'Unavailable';
+
+    let nonStriker =
+      'Unavailable';
+
+    let bowler =
+      'Unavailable';
+
+    let overs =
+      '0.0';
+
+    let lastBall =
+      '-';
+
+    let lastOver =
+      [];
+
+    try {
+
+      if (matchId) {
+
+        const commentaryUrl =
+          `https://www.cricbuzz.com/api/cricket-match/commentary/${matchId}`;
+
+        const commentary =
+          await axios.get(
+
+            commentaryUrl,
+
+            {
+
+              headers: {
+
+                'User-Agent':
+                  'Mozilla/5.0'
+              },
+
+              timeout: 10000
+            }
+          );
+
+        const data =
+          commentary.data;
+
+        // Attempt parsing
+        if (
+          data &&
+          data.commentaryList &&
+          data.commentaryList.length
+        ) {
+
+          const latest =
+            data.commentaryList[0];
+
+          striker =
+            latest.batsmanStriker ||
+            striker;
+
+          nonStriker =
+            latest.batsmanNonStriker ||
+            nonStriker;
+
+          bowler =
+            latest.bowler ||
+            bowler;
+
+          overs =
+            latest.overNumber ||
+            overs;
+
+          lastBall =
+            latest.event ||
+            '-';
+
+          if (
+            latest.overSummary
+          ) {
+
+            lastOver =
+              latest.overSummary
+                .split(' ');
+          }
+        }
+      }
+
+    }
+    catch (e) {
+
+      // Commentary fail silently
+    }
+
+    // =========================
+    // PREDICTION
+    // =========================
 
     let prediction =
       'Balanced';
 
     if (
+      score &&
       score.includes('/')
     ) {
 
@@ -325,9 +471,9 @@ if (score === 'Score unavailable') {
       }
     }
 
-    // =====================
+    // =========================
     // RESPONSE
-    // =====================
+    // =========================
 
     return res.status(200).json({
 
@@ -341,8 +487,26 @@ if (score === 'Score unavailable') {
         live_score:
           score,
 
+        overs:
+          overs,
+
         status:
           status,
+
+        striker:
+          striker,
+
+        non_striker:
+          nonStriker,
+
+        bowler:
+          bowler,
+
+        last_ball:
+          lastBall,
+
+        last_over:
+          lastOver,
 
         prediction:
           prediction,
