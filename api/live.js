@@ -3,576 +3,683 @@ const cheerio = require('cheerio');
 
 module.exports = async function (req, res) {
 
-  // =====================================
-  // HEADERS
-  // =====================================
-
-  res.setHeader('Access-Control-Allow-Origin', '*');
-
-  res.setHeader(
-    'Cache-Control',
-    'no-store'
-  );
-
-  try {
-
     // =====================================
-    // GET TEAMS
+    // HEADERS
     // =====================================
 
-    let teams =
-      req.query.teams || '';
+    res.setHeader(
+        'Access-Control-Allow-Origin',
+        '*'
+    );
 
-    if (
-      !teams &&
-      req.url &&
-      req.url.includes('teams=')
-    ) {
-
-      teams = decodeURIComponent(
-        req.url.split('teams=')[1]
-          .split('&')[0]
-      );
-    }
-
-    if (!teams) {
-
-      return res.status(200).json({
-
-        success: false,
-
-        error:
-          'No teams provided'
-      });
-    }
-
-    teams =
-      teams.toLowerCase();
-
-    // =====================================
-    // DEFAULT RESPONSE
-    // =====================================
-
-    const response = {
-
-      success: true,
-
-      match_info: {
-
-        title:
-          'IPL LIVE INTEL',
-
-        status:
-          'No live data available',
-
-        match_state:
-          'unknown',
-
-        live_score:
-          null,
-
-        overs:
-          null,
-
-        target:
-          null,
-
-        required_rr:
-          null,
-
-        current_rr:
-          null,
-
-        striker:
-          null,
-
-        non_striker:
-          null,
-
-        bowler:
-          null,
-
-        last_ball:
-          null,
-
-        last_over:
-          [],
-
-        prediction:
-          'Balanced',
-
-        source:
-          null,
-
-        source_url:
-          null
-      }
-    };
-
-    // =====================================
-    // IPL MATCH PAGE
-    // =====================================
-
-    const IPL_URL =
-      'https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches';
-
-    const iplPage =
-      await axios.get(
-
-        IPL_URL,
-
-        {
-
-          headers: {
-
-            'User-Agent':
-              'Mozilla/5.0'
-          },
-
-          timeout: 10000
-        }
-      );
-
-    const $ =
-      cheerio.load(
-        iplPage.data
-      );
-
-    let matchUrl =
-      null;
-
-    // =====================================
-    // FIND MATCH URL
-    // =====================================
-
-    $('a').each((i, el) => {
-
-      const href =
-        $(el).attr('href') || '';
-
-      const text =
-        (
-          $(el).text() + href
-        ).toLowerCase();
-
-      if (
-        href.includes(
-          '/live-cricket-scores/'
-        )
-      ) {
-
-        const t =
-          teams.split(' vs ');
-
-        if (t.length >= 2) {
-
-          const t1 =
-            t[0]
-              .trim()
-              .split(' ')[0];
-
-          const t2 =
-            t[1]
-              .trim()
-              .split(' ')[0];
-
-          if (
-            text.includes(t1) &&
-            text.includes(t2)
-          ) {
-
-            matchUrl =
-              'https://www.cricbuzz.com' +
-              href;
-
-            return false;
-          }
-        }
-      }
-    });
-
-    // =====================================
-    // MATCH NOT FOUND
-    // =====================================
-
-    if (!matchUrl) {
-
-      response.match_info.status =
-        'IPL match not found';
-
-      return res.status(200).json(
-        response
-      );
-    }
-
-    response.match_info.source_url =
-      matchUrl;
-
-    // =====================================
-    // MATCH ID
-    // =====================================
-
-    const idMatch =
-      matchUrl.match(
-        /live-cricket-scores\/(\d+)/
-      );
-
-    const matchId =
-      idMatch
-        ? idMatch[1]
-        : null;
-
-    // =====================================
-    // CRICBUZZ MATCH PAGE
-    // =====================================
+    res.setHeader(
+        'Cache-Control',
+        'no-store'
+    );
 
     try {
 
-      const matchPage =
-        await axios.get(
+        // =====================================
+        // GET TEAMS
+        // =====================================
 
-          matchUrl,
-
-          {
-
-            headers: {
-
-              'User-Agent':
-                'Mozilla/5.0'
-            },
-
-            timeout: 10000
-          }
-        );
-
-      const html =
-        matchPage.data;
-
-      const body =
-        html.toLowerCase();
-
-      // =========================
-      // STATUS DETECTION
-      // =========================
-
-      if (
-        body.includes(
-          'toss delayed'
-        )
-      ) {
-
-        response.match_info.status =
-          'Toss delayed due to rain';
-
-        response.match_info.match_state =
-          'delay';
-
-        response.match_info.source =
-          'cricbuzz';
-      }
-
-      else if (
-        body.includes(
-          'match abandoned'
-        )
-      ) {
-
-        response.match_info.status =
-          'Match abandoned';
-
-        response.match_info.match_state =
-          'abandoned';
-
-        response.match_info.source =
-          'cricbuzz';
-      }
-
-      else if (
-        body.includes(
-          'innings break'
-        )
-      ) {
-
-        response.match_info.status =
-          'Innings break';
-
-        response.match_info.match_state =
-          'break';
-
-        response.match_info.source =
-          'cricbuzz';
-      }
-
-      else if (
-        body.includes(
-          'won by'
-        )
-      ) {
-
-        response.match_info.match_state =
-          'completed';
-
-        response.match_info.source =
-          'cricbuzz';
-      }
-
-    }
-    catch (e) {
-
-      // Cricbuzz failed silently
-    }
-
-    // =====================================
-    // CRICBUZZ COMMENTARY API
-    // =====================================
-
-    try {
-
-      if (matchId) {
-
-        const commentaryUrl =
-          `https://www.cricbuzz.com/api/cricket-match/commentary/${matchId}`;
-
-        const commentary =
-          await axios.get(
-
-            commentaryUrl,
-
-            {
-
-              headers: {
-
-                'User-Agent':
-                  'Mozilla/5.0',
-
-                'Accept':
-                  'application/json'
-              },
-
-              timeout: 10000
-            }
-          );
-
-        const data =
-          commentary.data;
+        let teams =
+            req.query.teams || '';
 
         if (
-          data &&
-          data.commentaryList &&
-          data.commentaryList.length
+            !teams &&
+            req.url &&
+            req.url.includes('teams=')
         ) {
 
-          const latest =
-            data.commentaryList[0];
+            teams = decodeURIComponent(
 
-          // =========================
-          // ONLY USE REAL VALUES
-          // =========================
+                req.url
+                    .split('teams=')[1]
+                    .split('&')[0]
+            );
+        }
 
-          if (latest.score) {
+        if (!teams) {
 
-            response.match_info.live_score =
-              latest.score;
-          }
+            return res.status(200).json({
 
-          if (
-            latest.overNumber
-          ) {
+                success: false,
 
-            response.match_info.overs =
-              latest.overNumber;
-          }
+                error:
+                    'No teams provided'
+            });
+        }
 
-          if (
-            latest.batsmanStriker
-          ) {
+        teams =
+            teams.toLowerCase();
 
-            response.match_info.striker =
-              latest.batsmanStriker;
-          }
+        // =====================================
+        // DEFAULT RESPONSE
+        // =====================================
 
-          if (
-            latest.batsmanNonStriker
-          ) {
+        const response = {
 
-            response.match_info.non_striker =
-              latest.batsmanNonStriker;
-          }
+            success: true,
 
-          if (
-            latest.bowler
-          ) {
+            match_info: {
 
-            response.match_info.bowler =
-              latest.bowler;
-          }
+                title:
+                    'IPL LIVE INTEL',
 
-          if (
-            latest.event
-          ) {
+                status:
+                    'Awaiting live data',
 
-            response.match_info.last_ball =
-              latest.event;
-          }
+                match_state:
+                    'upcoming',
 
-          if (
-            latest.overSummary
-          ) {
+                live_score:
+                    null,
 
-            response.match_info.last_over =
-              latest.overSummary
-                .split(' ');
-          }
+                overs:
+                    null,
 
-          if (
-            data.matchHeader &&
-            data.matchHeader.status
-          ) {
+                target:
+                    null,
+
+                required_rr:
+                    null,
+
+                current_rr:
+                    null,
+
+                striker:
+                    null,
+
+                non_striker:
+                    null,
+
+                bowler:
+                    null,
+
+                toss:
+                    null,
+
+                result:
+                    null,
+
+                venue:
+                    null,
+
+                last_ball:
+                    null,
+
+                last_over:
+                    [],
+
+                prediction:
+                    'Balanced',
+
+                source:
+                    null,
+
+                source_url:
+                    null
+            }
+        };
+
+        // =====================================
+        // IPL MATCH PAGE
+        // =====================================
+
+        const IPL_URL =
+            'https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches';
+
+        const iplPage =
+            await axios.get(
+
+                IPL_URL,
+
+                {
+
+                    headers: {
+
+                        'User-Agent':
+                            'Mozilla/5.0'
+                    },
+
+                    timeout: 10000
+                }
+            );
+
+        const $ =
+            cheerio.load(
+                iplPage.data
+            );
+
+        let matchUrl =
+            null;
+
+        // =====================================
+        // FIND MATCH
+        // =====================================
+
+        $('a').each((i, el) => {
+
+            const href =
+                $(el).attr('href') || '';
+
+            const text =
+                (
+                    $(el).text() + href
+                ).toLowerCase();
+
+            if (
+                href.includes(
+                    '/live-cricket-scores/'
+                )
+            ) {
+
+                const t =
+                    teams.split(' vs ');
+
+                if (t.length >= 2) {
+
+                    const t1 =
+                        t[0]
+                            .trim()
+                            .split(' ')[0];
+
+                    const t2 =
+                        t[1]
+                            .trim()
+                            .split(' ')[0];
+
+                    if (
+                        text.includes(t1) &&
+                        text.includes(t2)
+                    ) {
+
+                        matchUrl =
+                            'https://www.cricbuzz.com' +
+                            href;
+
+                        return false;
+                    }
+                }
+            }
+        });
+
+        // =====================================
+        // MATCH NOT FOUND
+        // =====================================
+
+        if (!matchUrl) {
 
             response.match_info.status =
-              data.matchHeader.status;
-          }
+                'Match not found';
 
-          response.match_info.source =
-            'cricbuzz';
-
-          response.match_info.match_state =
-            'live';
+            return res.status(200).json(
+                response
+            );
         }
-      }
 
-    }
-    catch (e) {
+        response.match_info.source_url =
+            matchUrl;
 
-      // commentary blocked
-    }
+        // =====================================
+        // MATCH ID
+        // =====================================
 
-    // =====================================
-    // CREX FALLBACK
-    // =====================================
+        const idMatch =
+            matchUrl.match(
+                /live-cricket-scores\/(\d+)/
+            );
 
-    if (
-      !response.match_info.live_score
-    ) {
+        const matchId =
+            idMatch
+                ? idMatch[1]
+                : null;
 
-      try {
+        // =====================================
+        // FETCH MATCH PAGE
+        // =====================================
 
-        const crex =
-          await axios.get(
+        const matchPage =
+            await axios.get(
 
-            'https://crex.live',
+                matchUrl,
 
-            {
+                {
 
-              headers: {
+                    headers: {
 
-                'User-Agent':
-                  'Mozilla/5.0'
-              },
+                        'User-Agent':
+                            'Mozilla/5.0'
+                    },
 
-              timeout: 10000
-            }
-          );
+                    timeout: 10000
+                }
+            );
 
-        const crexHtml =
-          crex.data.toLowerCase();
+        const html =
+            matchPage.data;
 
-        // =========================
-        // ONLY STATUS
-        // =========================
+        const body =
+            html.toLowerCase();
+
+        // =====================================
+        // STATUS DETECTION
+        // =====================================
 
         if (
-          crexHtml.includes(
-            'toss delayed'
-          )
+            body.includes(
+                'toss delayed'
+            )
         ) {
 
-          response.match_info.status =
-            'Toss delayed due to rain';
+            response.match_info.status =
+                'Toss delayed due to rain';
 
-          response.match_info.match_state =
-            'delay';
+            response.match_info.match_state =
+                'delay';
 
-          response.match_info.source =
-            'crex';
+            response.match_info.source =
+                'cricbuzz';
         }
 
         else if (
-          crexHtml.includes(
-            'innings break'
-          )
+            body.includes(
+                'rain delay'
+            )
         ) {
 
-          response.match_info.status =
-            'Innings break';
+            response.match_info.status =
+                'Rain delay';
 
-          response.match_info.match_state =
-            'break';
+            response.match_info.match_state =
+                'delay';
 
-          response.match_info.source =
-            'crex';
+            response.match_info.source =
+                'cricbuzz';
         }
 
-      }
-      catch (e) {
+        else if (
+            body.includes(
+                'innings break'
+            )
+        ) {
 
-        // crex failed
-      }
-    }
+            response.match_info.status =
+                'Innings break';
 
-    // =====================================
-    // PREDICTION
-    // =====================================
+            response.match_info.match_state =
+                'break';
 
-    if (
-      response.match_info.live_score &&
-      typeof response.match_info.live_score === 'string' &&
-      response.match_info.live_score.includes('/')
-    ) {
+            response.match_info.source =
+                'cricbuzz';
+        }
 
-      const runs =
-        parseInt(
-          response.match_info.live_score
-            .split('/')[0]
+        else if (
+            body.includes(
+                'match abandoned'
+            )
+        ) {
+
+            response.match_info.status =
+                'Match abandoned';
+
+            response.match_info.match_state =
+                'abandoned';
+
+            response.match_info.source =
+                'cricbuzz';
+        }
+
+        else if (
+            body.includes(
+                'won by'
+            )
+        ) {
+
+            response.match_info.match_state =
+                'completed';
+
+            response.match_info.source =
+                'cricbuzz';
+
+            const resultMatch =
+                html.match(
+                    /([A-Za-z ]+ won by [^<]+)/i
+                );
+
+            if (
+                resultMatch &&
+                resultMatch[1]
+            ) {
+
+                response.match_info.result =
+                    resultMatch[1]
+                        .trim();
+
+                response.match_info.status =
+                    resultMatch[1]
+                        .trim();
+            }
+        }
+
+        else {
+
+            response.match_info.status =
+                'Match scheduled';
+
+            response.match_info.match_state =
+                'upcoming';
+        }
+
+        // =====================================
+        // VENUE
+        // =====================================
+
+        const venueMatch =
+            html.match(
+                /venue[^>]*>([^<]+)/i
+            );
+
+        if (
+            venueMatch &&
+            venueMatch[1]
+        ) {
+
+            response.match_info.venue =
+                venueMatch[1]
+                    .trim();
+        }
+
+        // =====================================
+        // TOSS
+        // =====================================
+
+        const tossMatch =
+            html.match(
+                /([A-Za-z ]+ won the toss[^<]+)/i
+            );
+
+        if (
+            tossMatch &&
+            tossMatch[1]
+        ) {
+
+            response.match_info.toss =
+                tossMatch[1]
+                    .trim();
+        }
+
+        // =====================================
+        // COMMENTARY API
+        // =====================================
+
+        try {
+
+            if (matchId) {
+
+                const commentaryUrl =
+`https://www.cricbuzz.com/api/cricket-match/commentary/${matchId}`;
+
+                const commentary =
+                    await axios.get(
+
+                        commentaryUrl,
+
+                        {
+
+                            headers: {
+
+                                'User-Agent':
+                                    'Mozilla/5.0',
+
+                                'Accept':
+                                    'application/json'
+                            },
+
+                            timeout: 10000
+                        }
+                    );
+
+                const data =
+                    commentary.data;
+
+                if (
+                    data &&
+                    data.commentaryList &&
+                    data.commentaryList.length
+                ) {
+
+                    const latest =
+                        data.commentaryList[0];
+
+                    // =====================
+                    // REAL VALUES ONLY
+                    // =====================
+
+                    if (latest.score) {
+
+                        response.match_info.live_score =
+                            latest.score;
+                    }
+
+                    if (
+                        latest.overNumber
+                    ) {
+
+                        response.match_info.overs =
+                            latest.overNumber;
+                    }
+
+                    if (
+                        latest.batsmanStriker
+                    ) {
+
+                        response.match_info.striker =
+                            latest.batsmanStriker;
+                    }
+
+                    if (
+                        latest.batsmanNonStriker
+                    ) {
+
+                        response.match_info.non_striker =
+                            latest.batsmanNonStriker;
+                    }
+
+                    if (
+                        latest.bowler
+                    ) {
+
+                        response.match_info.bowler =
+                            latest.bowler;
+                    }
+
+                    if (
+                        latest.event
+                    ) {
+
+                        response.match_info.last_ball =
+                            latest.event;
+                    }
+
+                    if (
+                        latest.overSummary
+                    ) {
+
+                        response.match_info.last_over =
+                            latest.overSummary
+                                .split(' ');
+                    }
+
+                    if (
+                        data.matchHeader &&
+                        data.matchHeader.status
+                    ) {
+
+                        response.match_info.status =
+                            data.matchHeader.status;
+                    }
+
+                    response.match_info.match_state =
+                        'live';
+
+                    response.match_info.source =
+                        'cricbuzz';
+                }
+            }
+
+        }
+        catch (e) {
+
+            // commentary blocked silently
+        }
+
+        // =====================================
+        // CREX FALLBACK
+        // =====================================
+
+        if (
+            !response.match_info.live_score
+        ) {
+
+            try {
+
+                const crex =
+                    await axios.get(
+
+                        'https://crex.live',
+
+                        {
+
+                            headers: {
+
+                                'User-Agent':
+                                    'Mozilla/5.0'
+                            },
+
+                            timeout: 10000
+                        }
+                    );
+
+                const crexHtml =
+                    crex.data.toLowerCase();
+
+                if (
+                    crexHtml.includes(
+                        'toss delayed'
+                    )
+                ) {
+
+                    response.match_info.status =
+                        'Toss delayed due to rain';
+
+                    response.match_info.match_state =
+                        'delay';
+
+                    response.match_info.source =
+                        'crex';
+                }
+
+                else if (
+                    crexHtml.includes(
+                        'rain delay'
+                    )
+                ) {
+
+                    response.match_info.status =
+                        'Rain delay';
+
+                    response.match_info.match_state =
+                        'delay';
+
+                    response.match_info.source =
+                        'crex';
+                }
+
+                else if (
+                    crexHtml.includes(
+                        'innings break'
+                    )
+                ) {
+
+                    response.match_info.status =
+                        'Innings break';
+
+                    response.match_info.match_state =
+                        'break';
+
+                    response.match_info.source =
+                        'crex';
+                }
+
+            }
+            catch (e) {
+
+                // crex fail silently
+            }
+        }
+
+        // =====================================
+        // PREDICTION ENGINE
+        // =====================================
+
+        if (
+            response.match_info.live_score &&
+            typeof response.match_info.live_score === 'string' &&
+            response.match_info.live_score.includes('/')
+        ) {
+
+            const runs =
+                parseInt(
+
+                    response.match_info.live_score
+                        .split('/')[0]
+                );
+
+            if (runs >= 200) {
+
+                response.match_info.prediction =
+                    'Batting side dominant';
+            }
+
+            else if (runs >= 170) {
+
+                response.match_info.prediction =
+                    'Batting side slight edge';
+            }
+
+            else if (runs <= 140) {
+
+                response.match_info.prediction =
+                    'Bowling pressure building';
+            }
+
+            else {
+
+                response.match_info.prediction =
+                    'Balanced';
+            }
+        }
+
+        // =====================================
+        // FINAL RESPONSE
+        // =====================================
+
+        return res.status(200).json(
+            response
         );
 
-      if (runs >= 200) {
-
-        response.match_info.prediction =
-          'Batting side dominant';
-      }
-
-      else if (runs >= 170) {
-
-        response.match_info.prediction =
-          'Batting side slight edge';
-      }
-
-      else if (runs <= 140) {
-
-        response.match_info.prediction =
-          'Bowling pressure building';
-      }
     }
+    catch (e) {
 
-    // =====================================
-    // FINAL RESPONSE
-    // =====================================
+        return res.status(200).json({
 
-    return res.status(200).json(
-      response
-    );
+            success: false,
 
-  }
-  catch (e) {
-
-    return res.status(200).json({
-
-      success: false,
-
-      error:
-        e.message ||
-        'Unknown error'
-    });
-  }
+            error:
+                e.message ||
+                'Unknown error'
+        });
+    }
 };
