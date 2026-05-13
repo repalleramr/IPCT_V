@@ -12,15 +12,16 @@ module.exports = async function (req, res) {
   const SERIES_URL = 'https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches';
   const HOME_URL = 'https://www.cricbuzz.com/';
 
-  // Safely extract Target Teams
+  // BULLETPROOF TEAM EXTRACTION: Natively syncs with Vercel's query parser
   let targetTeams = "";
-  try {
-      const urlObj = new URL(req.url, 'http://localhost');
-      targetTeams = urlObj.searchParams.get('teams') || "";
-      targetTeams = targetTeams.toLowerCase().replace(/\+/g, ' ');
-  } catch(e) {}
+  if (req.query && req.query.teams) {
+      targetTeams = String(req.query.teams).toLowerCase();
+  } else if (req.url && req.url.includes('teams=')) {
+      targetTeams = decodeURIComponent(req.url.split('teams=')[1].split('&')[0]).toLowerCase();
+  }
+  targetTeams = targetTeams.replace(/\+/g, ' ').trim();
 
-  // MI6 Alias Dictionary: Catches every possible way Cricbuzz spells team names
+  // MI6 Alias Dictionary
   const teamAliases = {
       "chennai": ["csk", "chennai"],
       "delhi": ["dc", "delhi"],
@@ -41,6 +42,7 @@ module.exports = async function (req, res) {
     let matchState = "unknown"; 
     let fallbackResult = "Awaiting match timing...";
 
+    // Extract the first word of each team to use as the search key
     const t1Word = targetTeams.split(' vs ')[0] ? targetTeams.split(' vs ')[0].trim().split(' ')[0] : "";
     const t2Word = targetTeams.split(' vs ')[1] ? targetTeams.split(' vs ')[1].trim().split(' ')[0] : "";
 
@@ -58,7 +60,6 @@ module.exports = async function (req, res) {
             const text = $series(el).text().toLowerCase();
             const href = $series(el).find('a[href*="cricket-score"]').first().attr('href') || "";
             
-            // Check if BOTH teams are mentioned via ANY of their aliases (in text OR url)
             const matchesT1 = hasAlias(text, t1Aliases) || hasAlias(href, t1Aliases);
             const matchesT2 = hasAlias(text, t2Aliases) || hasAlias(href, t2Aliases);
 
@@ -71,7 +72,6 @@ module.exports = async function (req, res) {
                     fallbackResult = "In Progress";
                 } else {
                     matchState = "upcoming";
-                    // Grab timing from either the preview or gray text block
                     let timeText = $series(el).find('.cb-text-preview').text().trim();
                     if (!timeText) timeText = $series(el).find('.text-gray').text().trim();
                     fallbackResult = timeText || "Match Starting Soon";
