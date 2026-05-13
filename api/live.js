@@ -146,7 +146,83 @@ module.exports = async function (req, res) {
 
     const html =
       match.data;
+// =====================
+// SCORE DETECTION
+// =====================
 
+let score = 'Score unavailable';
+
+// Try visible scoreboard text
+const possibleSelectors = [
+
+  '.cb-min-bat-rw',
+
+  '.cb-font-20',
+
+  '.cb-scrs-wrp',
+
+  '.cb-col-100',
+
+  '.cb-lv-scrs-col',
+
+  '.cb-text-live'
+];
+
+for (const sel of possibleSelectors) {
+
+  const txt =
+    $m(sel)
+      .text()
+      .trim();
+
+  const found =
+    txt.match(
+      /\d{2,3}\/\d{1,2}/
+    );
+
+  if (found) {
+
+    score = found[0];
+
+    break;
+  }
+}
+
+// FINAL FALLBACK
+if (score === 'Score unavailable') {
+
+  const bodyText =
+    $m('body')
+      .text()
+      .replace(/\s+/g, ' ');
+
+  const allScores =
+    bodyText.match(
+      /\d{2,3}\/\d{1,2}/g
+    );
+
+  if (
+    allScores &&
+    allScores.length
+  ) {
+
+    // choose realistic highest score
+    score =
+      allScores.sort((a, b) => {
+
+        return (
+          parseInt(
+            b.split('/')[0]
+          ) -
+
+          parseInt(
+            a.split('/')[0]
+          )
+        );
+
+      })[0];
+  }
+}
     // =====================
     // SCORE REGEX
     // =====================
