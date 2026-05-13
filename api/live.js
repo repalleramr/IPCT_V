@@ -17,8 +17,8 @@ module.exports = async function (req, res) {
     "chennai": ["csk", "chennai"], "delhi": ["dc", "delhi"],
     "gujarat": ["gt", "gujarat"], "kolkata": ["kkr", "kolkata"],
     "lucknow": ["lsg", "lucknow"], "mumbai": ["mi", "mumbai"],
-    "punjab": ["pbks", "punjab"], "rajasthan": ["rr", "rajasthan"],
-    "royal": ["rcb", "bengaluru", "bangalore"], "sunrisers": ["srh", "hyderabad"]
+    "punjab": ["pbks", "punjab", "kings"], "rajasthan": ["rr", "rajasthan"],
+    "royal": ["rcb", "bengaluru", "bangalore"], "sunrisers": ["srh", "hyderabad", "sunrisers"]
   };
 
   let t1 = targetTeams.split(' vs ')[0]?.trim().split(' ')[0] || "";
@@ -45,132 +45,137 @@ module.exports = async function (req, res) {
         last_over: ["-", "-", "-", "-", "-", "-"],
         prediction: "Tracking...",
         countdown: null,
-        source: "crex-live-engine",
+        source: "mobile-ghost-protocol",
         source_url: null
   };
 
   try {
     const headers = { 
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8'
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml'
     };
 
     // ==============================================================
-    // STEP 1: INFILTRATE THE CREX MASTER SERIES PAGE
+    // STEP 1: LOCATE TARGET VIA MOBILE LITE DIRECTORIES
     // ==============================================================
-    const seriesUrl = 'https://crex.com/series/indian-premier-league-2026-1PW/matches';
-    const { data: listData } = await axios.get(seriesUrl, { headers, timeout: 8000 });
-    const $list = cheerio.load(listData);
-    
+    const directories = [
+        'https://m.cricbuzz.com/cricket-match/live-scores',
+        'https://m.cricbuzz.com/cricket-match/live-scores/recent-matches',
+        'https://www.espncricinfo.com/rss/livescores.xml' // Failsafe XML
+    ];
+
     let matchUrl = null;
+    let xmlStatus = null;
 
-    // Scan all links on the CREX series page
-    $list('a').each((i, el) => {
-        const href = $list(el).attr('href') || "";
-        const text = ($list(el).text() + " " + href).toLowerCase();
-        
-        if (href.includes('cricket-live-score') || href.includes('match-details')) {
-            if (t1A.some(a => text.includes(a)) && t2A.some(a => text.includes(a))) {
-                matchUrl = href.startsWith('http') ? href : 'https://crex.com' + href;
-                return false; // Break loop once found
-            }
-        }
-    });
-
-    if (!matchUrl) throw new Error(`Target ${t1} vs ${t2} not found on CREX.`);
-    payload.source_url = matchUrl;
-
-    // ==============================================================
-    // STEP 2: RIP THE CREX MATCH PAGE
-    // ==============================================================
-    const { data: matchData } = await axios.get(matchUrl, { headers, timeout: 8000 });
-    const $m = cheerio.load(matchData);
-
-    let pageText = $m('body').text();
-    let pageTitle = $m('title').text() || "";
-
-    // 1. EXTRACT FROM NEXT.JS INTERNAL JSON (If available)
-    let nextDataBlock = $m('#__NEXT_DATA__').html();
-    if (nextDataBlock) {
+    for (const dir of directories) {
         try {
-            let nextJson = JSON.parse(nextDataBlock);
-            // CREX stores massive amounts of data in their Next.js props. 
-            // We can stringify it and regex the exact values we need.
-            let stringified = JSON.stringify(nextJson);
+            const { data: dirData } = await axios.get(dir, { headers, timeout: 5000 });
             
-            let venueMatch = stringified.match(/"venueName":"(.*?)"/);
-            if (venueMatch) payload.venue = venueMatch[1];
-
-            let tossMatch = stringified.match(/"tossText":"(.*?)"/);
-            if (tossMatch) payload.toss = tossMatch[1];
-            
-            let statusMatch = stringified.match(/"statusText":"(.*?)"/);
-            if (statusMatch) payload.status = statusMatch[1];
-
-        } catch (e) { console.log("Next JSON parsing skipped."); }
+            if (dir.includes('xml')) {
+                const $x = cheerio.load(dirData, { xmlMode: true });
+                $x('item').each((i, el) => {
+                    const title = $x(el).find('title').text().toLowerCase();
+                    if (t1A.some(a => title.includes(a)) && t2A.some(a => title.includes(a))) {
+                        xmlStatus = $x(el).find('description').text().trim();
+                    }
+                });
+            } else {
+                const $d = cheerio.load(dirData);
+                $d('a').each((i, el) => {
+                    const href = $d(el).attr('href') || "";
+                    const text = ($d(el).text() + " " + href).toLowerCase();
+                    if (href.includes('/live-cricket-scores/') || href.includes('/cricket-scores/')) {
+                        if (t1A.some(a => text.includes(a)) && t2A.some(a => text.includes(a))) {
+                            matchUrl = href.startsWith('http') ? href : 'https://m.cricbuzz.com' + href;
+                            return false; 
+                        }
+                    }
+                });
+            }
+            if (matchUrl) break; 
+        } catch(e) {}
     }
 
-    // 2. FALLBACK AGGRESSIVE DOM EXTRACTION (If JSON is encrypted)
+    if (!matchUrl && !xmlStatus) throw new Error(`Target ${t1} vs ${t2} completely missing from global matrix.`);
     
-    // Status Failsafe
-    if (!payload.status) {
-        let titleSplit = pageTitle.split('|')[0].trim();
-        if (titleSplit.toLowerCase().includes('won') || titleSplit.toLowerCase().includes('result')) {
-            payload.status = titleSplit;
+    // ==============================================================
+    // STEP 2: INFILTRATE MATCH PAGE (MOBILE HTML IS UNBLOCKED)
+    // ==============================================================
+    if (matchUrl) {
+        // Force the URL to the scorecard view to guarantee all data is present
+        let stableUrl = matchUrl.replace('/live-cricket-scores/', '/live-cricket-scorecard/').replace('/cricket-scores/', '/live-cricket-scorecard/');
+        payload.source_url = stableUrl;
+
+        const { data: mHtml } = await axios.get(stableUrl, { headers, timeout: 6000 });
+        const $m = cheerio.load(mHtml);
+        
+        // 1. Convert entire page to a clean text string for Regex Hunting
+        let rawText = $m('body').text().replace(/\s+/g, ' ');
+        let pageTitle = $m('title').text() || "";
+
+        // 2. Global Regex Hunter (Finds Venue and Toss no matter where it is)
+        let vMatch = rawText.match(/(?:Venue|Stadium|Location)[\s:]+([a-zA-Z0-9\s,]+)(?:Umpires|Referee|Toss|Match)/i);
+        if (vMatch) payload.venue = vMatch[1].split(',')[0].trim();
+        
+        let tMatch = rawText.match(/Toss[\s:]+([a-zA-Z0-9\s,]+)(?:Time|Venue|Squad|Umpires)/i);
+        if (tMatch) payload.toss = tMatch[1].split(/(?=Time|Venue)/)[0].trim();
+
+        // 3. Extract Status
+        let cbStatus = $m('.cb-text-complete, .ui-match-status, .cb-status-msg').first().text().trim();
+        if (cbStatus) payload.status = cbStatus;
+        else if (xmlStatus) payload.status = xmlStatus;
+
+        // 4. Extract Score
+        let scoreHeader = $m('.ui-bat-team-scores, .cb-min-bat-rw').first().text().trim();
+        if (scoreHeader) {
+            payload.live_score = scoreHeader;
+        } else {
+            // Failsafe: Rip from title tag
+            let titleScore = pageTitle.split(',')[0].split('|')[0].trim();
+            if (titleScore.match(/\d+\/\d+/)) payload.live_score = titleScore;
         }
-    }
 
-    // Deep Hunt for Venue & Toss
-    $m('div, span, p').each((i, el) => {
-        let txt = $m(el).text().trim();
-        if (!payload.venue && txt.includes('Venue')) {
-            let v = txt.split('Venue')[1]?.split(',')[0]?.replace(':', '').trim();
-            if (v && v.length > 3) payload.venue = v;
+        // 5. Extract Deep Stats (Run Rates)
+        let crrMatch = rawText.match(/CRR[\s:]*([\d\.]+)/);
+        let rrrMatch = rawText.match(/REQ[\s:]*([\d\.]+)/);
+        if (crrMatch) payload.current_rr = crrMatch[1];
+        if (rrrMatch) payload.required_rr = rrrMatch[1];
+        let tgtMatch = rawText.match(/Target[\s:]*(\d+)/i);
+        if (tgtMatch) payload.target = tgtMatch[1];
+
+        // 6. Players
+        let batLinks = $m('.cb-live-bat-table a, .cb-text-link');
+        if (batLinks.length > 0) payload.striker = $m(batLinks[0]).text().trim();
+        if (batLinks.length > 1) payload.non_striker = $m(batLinks[1]).text().trim();
+        let bwlLinks = $m('.cb-live-bwl-table a');
+        if (bwlLinks.length > 0) payload.bowler = $m(bwlLinks[0]).text().trim();
+
+        // 7. Radar (Last Over)
+        let balls = [];
+        $m('.cb-ovr-flo span, .cb-text-gray span').each((i, el) => {
+            let b = $m(el).text().trim(); 
+            if (b.length > 0 && b.length <= 3 && b.match(/[0-9W]/)) balls.push(b);
+        });
+        if (balls.length > 0) {
+            payload.last_over = balls.slice(-6); // Grab the most recent 6
+            payload.last_ball = payload.last_over[payload.last_over.length - 1];
         }
-        if (!payload.toss && txt.includes('Toss')) {
-            let t = txt.split('Toss')[1]?.split(/(?=Time|Venue)/)[0]?.replace(':', '').trim();
-            if (t && t.length > 3) payload.toss = t;
-        }
-    });
-
-    // Extract Score
-    let rawScore = $m('.live-score, .score, h1, h2').text().match(/([A-Z-]+\s*\d+\/\d+\s*\([\d\.]+\))/g);
-    if (rawScore && rawScore.length > 0) {
-        payload.live_score = rawScore.join(' v ');
-    } else {
-        // Rip from Title Tab (CREX puts the score right in the tab name)
-        let titleScore = pageTitle.split('|')[0].replace('Live Cricket Score', '').trim();
-        if (titleScore.match(/\d+\/\d+/)) payload.live_score = titleScore;
-    }
-
-    // Extract Run Rates & Target
-    let crrMatch = pageText.match(/CRR[:\s]*([\d\.]+)/);
-    let rrrMatch = pageText.match(/REQ[:\s]*([\d\.]+)/);
-    let tgtMatch = pageText.match(/Target[:\s]*(\d+)/i);
-    if (crrMatch) payload.current_rr = crrMatch[1];
-    if (rrrMatch) payload.required_rr = rrrMatch[1];
-    if (tgtMatch) payload.target = tgtMatch[1];
-
-    // Build the Radar
-    let balls = [];
-    let ballMatches = pageText.match(/\b(W|0|1|2|3|4|5|6)\b/g); 
-    if (ballMatches && ballMatches.length > 10) {
-        // Grab the last 6 reasonable cricket ball events found
-        balls = ballMatches.slice(-6);
-        payload.last_over = balls;
-        payload.last_ball = balls[balls.length - 1];
+    } else if (xmlStatus) {
+        payload.status = xmlStatus;
+        payload.live_score = "XML Feed Active";
     }
 
     // ==============================================================
-    // STEP 3: MATCH STATE ENGINE
+    // MATCH STATE CALCULATION ENGINE
     // ==============================================================
     let lowerStatus = (payload.status || "").toLowerCase();
-    let lowerTitle = pageTitle.toLowerCase();
-    let isCompleted = lowerStatus.includes('won') || lowerTitle.includes('won by');
+    let lowerTitle = (payload.title || "").toLowerCase();
+
+    let isCompleted = lowerStatus.includes('won') || lowerStatus.includes('result') || lowerStatus.includes('tied');
 
     if (lowerStatus.includes('abandoned')) {
         payload.match_state = "abandoned"; payload.title = "MISSION ABORTED";
-    } else if (lowerStatus.includes('delay') || lowerStatus.includes('rain')) {
+    } else if (lowerStatus.includes('delay') || lowerStatus.includes('rain') || lowerStatus.includes('stumps')) {
         payload.match_state = "delay"; payload.title = "WEATHER PROTOCOL";
     } else if (isCompleted) {
         payload.match_state = "completed"; 
