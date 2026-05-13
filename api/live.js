@@ -9,15 +9,12 @@ module.exports = async function (req, res) {
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  // New Strategy: Scan the master homepage slider instead of a hidden series link
-  const HOME_URL = 'https://www.cricbuzz.com/';
+  const SERIES_URL = 'https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches';
 
   // Read the Target Teams sent from your Android App
-  let targetTeams = null;
+  let targetTeams = "";
   if (req.url.includes('teams=')) {
       targetTeams = decodeURIComponent(req.url.split('teams=')[1].split('&')[0]).toLowerCase();
-      // Auto-correct Bengaluru to Bangalore as Cricbuzz URLs use the old name
-      targetTeams = targetTeams.replace('bengaluru', 'bangalore');
   }
 
   try {
@@ -25,61 +22,68 @@ module.exports = async function (req, res) {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     };
 
-    const { data: homeHtml } = await axios.get(HOME_URL, { headers });
-    const $home = cheerio.load(homeHtml);
+    const { data: seriesHtml } = await axios.get(SERIES_URL, { headers });
+    const $series = cheerio.load(seriesHtml);
+    
     let activeMatchUrl = null;
+    let fallbackUrl = null;
 
-    // DIRECTIVE 1: Search the Cricbuzz Home Page specifically for IPL links
-    $home('a[href*="/live-cricket-scores/"]').each((i, el) => {
-        const href = $home(el).attr('href').toLowerCase();
+    // --- PHASE 1: TARGETED SEARCH WITH STATUS CHECK ---
+    $series('.cb-series-matches').each((i, el) => {
+        const text = $series(el).text().toLowerCase();
+        const linkElem = $series(el).find('a[href*="/live-cricket-scores/"]').first();
+        const href = linkElem.attr('href');
         
-        // Filter strictly for IPL matches in the slider
-        if (href.includes('indian-premier-league')) {
-            if (targetTeams) {
-                // Extract the first word of the team you selected (e.g., "royal" or "mumbai")
-                const team1FirstWord = targetTeams.split(' vs ')[0].trim().split(' ')[0]; 
-                
-                // Check if the Cricbuzz URL contains that word
-                if (href.includes(team1FirstWord)) {
-                    activeMatchUrl = $home(el).attr('href');
-                    return false; // Found exact match, stop searching
+        if (!href) return;
+        
+        // Strict Status Checks using Cricbuzz's internal HTML classes
+        const isLive = $series(el).find('.cb-text-live').length > 0;
+        const isPreview = $series(el).find('.cb-text-preview').length > 0;
+        const isComplete = $series(el).find('.cb-text-complete').length > 0 || text.includes('won by');
+
+        // Check if this block matches the teams you selected
+        if (targetTeams) {
+            // Extract just the first word of each team (e.g. "royal" and "kolkata") for a foolproof match
+            const t1 = targetTeams.split(' vs ')[0].trim().split(' ')[0]; 
+            const t2 = targetTeams.split(' vs ')[1] ? targetTeams.split(' vs ')[1].trim().split(' ')[0] : ""; 
+            
+            if (text.includes(t1) && (!t2 || text.includes(t2))) {
+                if (!isComplete) {
+                    activeMatchUrl = href;
+                    return false; // Target Locked, stop searching
                 }
-            } else {
-                // If no team specified, grab the very first IPL match found
-                activeMatchUrl = $home(el).attr('href');
-                return false;
             }
+        }
+
+        // If targeted search misses, save the very first Live or Preview match as a backup
+        if (!fallbackUrl && !isComplete && (isLive || isPreview)) {
+            fallbackUrl = href;
         }
     });
 
-    // DIRECTIVE 2: Ultimate Failsafe - Just grab the first IPL match regardless of teams
+    // --- PHASE 2: FALLBACK TO ACTIVE MATCH ---
     if (!activeMatchUrl) {
-        $home('a[href*="/live-cricket-scores/"]').each((i, el) => {
-            const href = $home(el).attr('href').toLowerCase();
-            if (href.includes('indian-premier-league')) {
-                activeMatchUrl = $home(el).attr('href');
-                return false;
-            }
-        });
+        activeMatchUrl = fallbackUrl;
     }
 
-    // DIRECTIVE 3: If literally nothing is found on the homepage
-    if (!activeMatchUrl || activeMatchUrl === "undefined") {
+    if (!activeMatchUrl) {
         return res.status(200).json({
           success: true,
-          match_info: { title: "MISSION FAILED", live_score: "Cricbuzz Home API Offline", status: "No IPL Match Found", bowler: "N/A" }
+          match_info: { title: "STANDBY", live_score: "Awaiting Next Mission", status: "Offline", bowler: "N/A" }
         });
     }
 
     if (!activeMatchUrl.startsWith('http')) activeMatchUrl = 'https://www.cricbuzz.com' + activeMatchUrl;
 
-    // FETCH THE TARGETED MATCH
+    // --- PHASE 3: DATA EXTRACTION ---
     const { data: matchHtml } = await axios.get(activeMatchUrl, { headers });
     const $ = cheerio.load(matchHtml);
 
+    // Score Extractor
     const pageTitle = $('title').text();
     let scoreFromTitle = pageTitle.includes('-') ? pageTitle.split('-')[0].trim() : "Pre-Match Intel";
 
+    // Deep Bowler Extractor
     let bInfo = "Waiting for Toss/Bowler...";
     const bRow = $('.cb-min-bwl-rw').first();
     if (bRow.length > 0) {
@@ -90,11 +94,11 @@ module.exports = async function (req, res) {
         const bStats = $('.cb-col-50').filter((i, e) => $(e).text().toLowerCase().includes('ov')).first();
         if (bStats.length > 0) {
             const bName = bStats.prev().text().trim();
-            if (bName && bName.length < 25) bInfo = bName + " (On Deck)";
+            if (bName && bName.length < 25) bInfo = bName + " (Active)";
         }
     }
 
-    const liveStatus = $('.cb-text-live, .cb-text-preview, .cb-text-complete, .cb-min-stts').first().text().trim() || "Status Unknown";
+    const liveStatus = $('.cb-text-live, .cb-text-preview, .cb-min-stts').first().text().trim() || "Status Unknown";
 
     res.status(200).json({
       success: true,
