@@ -2,6 +2,7 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 
 module.exports = async function (req, res) {
+  // CORS Setup
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -9,6 +10,12 @@ module.exports = async function (req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   const SERIES_URL = 'https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches';
+
+  // Read the Target Teams sent from your Android App
+  let targetTeams = null;
+  if (req.url.includes('teams=')) {
+      targetTeams = decodeURIComponent(req.url.split('teams=')[1].split('&')[0]).toLowerCase();
+  }
 
   try {
     const headers = {
@@ -19,51 +26,50 @@ module.exports = async function (req, res) {
     const $series = cheerio.load(seriesHtml);
     let activeMatchUrl = null;
 
-    // 1. LOOK FOR A LIVE MATCH
-    const liveElement = $series('.cb-text-live').first();
-    if (liveElement.length > 0) {
-        activeMatchUrl = liveElement.closest('div.cb-col-100, .cb-series-matches').find('a[href*="/live-cricket-scores/"]').attr('href');
-    }
+    // DIRECTIVE 1: Search specifically for the teams selected in the app dropdown
+    if (targetTeams) {
+        const teamParts = targetTeams.split(' vs ').map(t => t.trim());
+        const t1 = teamParts[0];
+        const t2 = teamParts[1] || ""; 
 
-    // 2. IF NO LIVE MATCH, LOOK FOR THE NEXT UPCOMING MATCH (e.g., MI vs RCB)
-    if (!activeMatchUrl) {
-        const previewElement = $series('.cb-text-preview').first();
-        if (previewElement.length > 0) {
-            activeMatchUrl = previewElement.closest('div.cb-col-100, .cb-series-matches').find('a[href*="/live-cricket-scores/"]').attr('href');
-        }
-    }
-
-    // 3. FAILSAFE: Find the first match that does NOT have the "Completed" tag
-    if (!activeMatchUrl) {
-        $series('a[href*="/live-cricket-scores/"]').each((i, el) => {
-            const block = $series(el).closest('div.cb-col-100');
-            const isFinished = block.find('.cb-text-complete').length > 0;
-            
-            if (!isFinished && !activeMatchUrl && $series(el).attr('href').includes('indian-premier-league')) {
-                activeMatchUrl = $series(el).attr('href');
+        $series('.cb-col-100, .cb-series-matches').each((i, el) => {
+            const blockText = $series(el).text().toLowerCase();
+            // If this match block contains both your selected team names
+            if (t1 && blockText.includes(t1) && blockText.includes(t2)) {
+                const link = $series(el).find('a[href*="/live-cricket-scores/"]').attr('href');
+                if (link) {
+                    activeMatchUrl = link;
+                    return false; // Target Acquired, break the loop
+                }
             }
         });
     }
 
-    // If season is over
+    // DIRECTIVE 2: Failsafe to live/next match if no target was sent
+    if (!activeMatchUrl) {
+        const liveElement = $series('.cb-text-live, .cb-text-preview').first();
+        if (liveElement.length > 0) {
+            activeMatchUrl = liveElement.closest('div.cb-col-100').find('a[href*="/live-cricket-scores/"]').attr('href');
+        }
+    }
+
     if (!activeMatchUrl) {
         return res.status(200).json({
           success: true,
-          match_info: { title: "IPL Offline", live_score: "No active matches found.", status: "Standby", bowler: "Scanning..." }
+          match_info: { title: "Target Missing", live_score: "Could not locate this match on server.", status: "Standby", bowler: "N/A" }
         });
     }
 
     if (!activeMatchUrl.startsWith('http')) activeMatchUrl = 'https://www.cricbuzz.com' + activeMatchUrl;
 
-    // FETCH THE TARGET MATCH
+    // FETCH THE TARGETED MATCH
     const { data: matchHtml } = await axios.get(activeMatchUrl, { headers });
     const $ = cheerio.load(matchHtml);
 
     const pageTitle = $('title').text();
     let scoreFromTitle = pageTitle.includes('-') ? pageTitle.split('-')[0].trim() : "Pre-Match Intel";
 
-    // BOWLER EXTRACTION
-    let bInfo = "Scanning Field...";
+    let bInfo = "Waiting for Bowler...";
     const bRow = $('.cb-min-bwl-rw').first();
     if (bRow.length > 0) {
         const name = bRow.find('a').first().text().trim();
@@ -75,18 +81,18 @@ module.exports = async function (req, res) {
         if (bName && bName.length < 25) bInfo = bName + " (On Deck)";
     }
 
-    const liveStatus = $('.cb-text-live, .cb-text-preview, .cb-min-stts').first().text().trim() || "Match starting soon...";
+    const liveStatus = $('.cb-text-live, .cb-text-preview, .cb-text-complete, .cb-min-stts').first().text().trim() || "Status Unknown";
 
     res.status(200).json({
       success: true,
       timestamp: new Date().toISOString(),
       match_info: {
-        title: "IPL 2026 MISSION",
+        title: "TARGET LOCKED",
         live_score: scoreFromTitle,
         status: liveStatus,
         bowler: bInfo
       },
-      target: activeMatchUrl // Watch this link change to MI vs RCB!
+      target: activeMatchUrl
     });
 
   } catch (error) {
