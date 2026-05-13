@@ -9,10 +9,6 @@ module.exports = async function (req, res) {
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  // The master schedule link you provided
-  const SERIES_URL = 'https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches';
-
-  // Read teams from PWA
   let targetTeams = "";
   if (req.query && req.query.teams) {
     targetTeams = String(req.query.teams).toLowerCase();
@@ -21,7 +17,7 @@ module.exports = async function (req, res) {
   }
   targetTeams = targetTeams.replace(/\+/g, ' ').trim();
 
-  // IPCT Dictionary
+  // IPCT Alias Dictionary
   const teamAliases = {
     "chennai": ["csk", "chennai"],
     "delhi": ["dc", "delhi"],
@@ -36,69 +32,77 @@ module.exports = async function (req, res) {
   };
 
   try {
-    const headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' };
-    const { data: seriesHtml } = await axios.get(SERIES_URL, { headers });
-    const $series = cheerio.load(seriesHtml);
-
-    let activeMatchUrl = null;
-
+    const headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' };
+    
     const team1 = targetTeams.split(' vs ')[0] ? targetTeams.split(' vs ')[0].trim().split(' ')[0] : "";
     const team2 = targetTeams.split(' vs ')[1] ? targetTeams.split(' vs ')[1].trim().split(' ')[0] : "";
     const t1A = teamAliases[team1] || [team1];
     const t2A = teamAliases[team2] || [team2];
 
-    // --- PHASE 1: HYBRID URL MATCHER ---
-    // Scans both the URL string AND the surrounding text box to guarantee a lock
-    $series('a[href*="cricket-score"]').each((i, el) => {
-      const href = $series(el).attr('href').toLowerCase();
-      // Look two levels up to capture the entire row of text
-      const surroundingText = $series(el).parent().parent().parent().text().toLowerCase();
-      const combinedIntel = href + " " + surroundingText;
-      
-      const matchT1 = t1A.some(a => a && combinedIntel.includes(a));
-      const matchT2 = t2A.some(a => a && combinedIntel.includes(a));
-      
-      if (matchT1 && matchT2) {
-        activeMatchUrl = $series(el).attr('href');
-        activeMatchUrl = activeMatchUrl.startsWith('http') ? activeMatchUrl : 'https://www.cricbuzz.com' + activeMatchUrl;
-        return false; // Target Acquired
-      }
-    });
+    let activeMatchUrl = null;
 
-    // Failsafe if target genuinely does not exist on schedule
+    // --- PHASE 1: URL HARVESTER ---
+    // Scan both the Series Page and the Homepage to guarantee we find the link
+    const pagesToScan = [
+        'https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches',
+        'https://www.cricbuzz.com/'
+    ];
+
+    for (const pageUrl of pagesToScan) {
+        if (activeMatchUrl) break; 
+        try {
+            const { data } = await axios.get(pageUrl, { headers });
+            const $ = cheerio.load(data);
+            
+            // Extract every single cricket score link on the page
+            $('a[href*="cricket-score"]').each((i, el) => {
+                const href = $(el).attr('href').toLowerCase();
+                
+                // Check if the raw URL string contains the team abbreviations (e.g., rcb and kkr)
+                const matchT1 = t1A.some(a => a && href.includes(a));
+                const matchT2 = t2A.some(a => a && href.includes(a));
+                
+                if (matchT1 && matchT2) {
+                    activeMatchUrl = $(el).attr('href');
+                    if (!activeMatchUrl.startsWith('http')) activeMatchUrl = 'https://www.cricbuzz.com' + activeMatchUrl;
+                    return false; // Target Locked, break out of loop
+                }
+            });
+        } catch (e) {
+            // Silently ignore if one page fails to load and check the next one
+        }
+    }
+
+    // Ultimate Failsafe
     if (!activeMatchUrl) {
       return res.status(200).json({
         success: true,
         match_info: {
           title: "IPCT STANDBY",
           live_score: "Intel Offline",
-          status: "Match Not Found on Schedule",
+          status: "Match Not Found in Matrix",
           bowler: "N/A",
           last_balls: [],
           prediction: "Verify Dropdown Target"
         },
-        target: SERIES_URL
+        target: pagesToScan[0]
       });
     }
 
-    // --- PHASE 2: DIRECT MATCH PAGE SCRAPE ---
-    // Forces the URL into live commentary mode to extract countdowns or final results
+    // --- PHASE 2: FORCE SCRAPE THE ACTUAL MATCH PAGE ---
     let commUrl = activeMatchUrl;
-    if (commUrl.includes('/cricket-scores/')) {
-      commUrl = commUrl.replace('/cricket-scores/', '/live-cricket-scores/');
-    } else if (commUrl.includes('/cricket-scorecard/')) {
-      commUrl = commUrl.replace('/cricket-scorecard/', '/live-cricket-scores/');
-    }
+    if (commUrl.includes('/cricket-scores/')) commUrl = commUrl.replace('/cricket-scores/', '/live-cricket-scores/');
+    if (commUrl.includes('/cricket-scorecard/')) commUrl = commUrl.replace('/cricket-scorecard/', '/live-cricket-scores/');
 
     const { data: matchHtml } = await axios.get(commUrl, { headers });
-    const $ = cheerio.load(matchHtml);
+    const $m = cheerio.load(matchHtml);
 
     // 1. Fetch Exact Status (Countdown timer, Live status, or Final Result)
-    let statusText = $('.cb-text-complete, .cb-text-live, .cb-min-stts, .cb-text-preview, .cb-nav-subhdr').first().text().trim();
-    if (!statusText) statusText = $('.text-gray').first().text().trim() || "Status Unknown";
+    let statusText = $m('.cb-text-complete, .cb-text-live, .cb-min-stts, .cb-text-preview, .cb-nav-subhdr').first().text().trim();
+    if (!statusText) statusText = $m('.text-gray').first().text().trim() || "Status Unknown";
 
     // 2. Fetch Score from Title
-    let pageTitle = $('title').text();
+    let pageTitle = $m('title').text();
     let scoreStr = pageTitle.split('-')[0].trim();
     if (scoreStr.toLowerCase().includes(' vs ') || scoreStr.toLowerCase().includes('opt to')) {
         scoreStr = "Pre-Match Intel";
@@ -106,19 +110,19 @@ module.exports = async function (req, res) {
 
     // 3. Fetch Ball History
     let ballHistory = [];
-    $('.cb-col-10.cb-font-12, .cb-col.cb-col-8.cb-mtch-blt').each((i, el) => {
-      if (i < 12) ballHistory.push($(el).text().trim());
+    $m('.cb-col-10.cb-font-12, .cb-col.cb-col-8.cb-mtch-blt').each((i, el) => {
+      if (i < 12) ballHistory.push($m(el).text().trim());
     });
 
     // 4. Fetch Bowler
     let bowlerStr = "N/A";
-    const bRow = $('.cb-min-bwl-rw').first();
+    const bRow = $m('.cb-min-bwl-rw').first();
     if (bRow.length > 0) {
         const name = bRow.find('a').first().text().trim();
         const stats = bRow.text().replace(name, '').replace(/\s+/g, ' ').trim();
         if (name) bowlerStr = `${name} (${stats})`;
     } else {
-        const bStats = $('.cb-col-50').filter((i, e) => $(e).text().toLowerCase().includes('ov')).first();
+        const bStats = $m('.cb-col-50').filter((i, e) => $m(e).text().toLowerCase().includes('ov')).first();
         if (bStats.length > 0) {
             const bName = bStats.prev().text().trim();
             if (bName) bowlerStr = bName + " (Active)";
@@ -126,7 +130,7 @@ module.exports = async function (req, res) {
     }
 
     // --- PHASE 3: ORACLE LOGIC & OUTPUT ---
-    let isComplete = $('.cb-text-complete').length > 0 || statusText.toLowerCase().includes('won by') || statusText.toLowerCase().includes('result');
+    let isComplete = $m('.cb-text-complete').length > 0 || statusText.toLowerCase().includes('won by') || statusText.toLowerCase().includes('result');
     let isUpcoming = scoreStr === "Pre-Match Intel";
     let predStr = "Waiting for Toss";
 
@@ -152,7 +156,7 @@ module.exports = async function (req, res) {
       match_info: {
         title: isComplete ? "MISSION ACCOMPLISHED" : "IPCT TARGET LOCKED",
         live_score: scoreStr,
-        status: statusText, // Will explicitly grab the Countdown Timer here!
+        status: statusText, // Pulls the exact countdown or final score result
         bowler: bowlerStr,
         last_balls: ballHistory,
         prediction: predStr
