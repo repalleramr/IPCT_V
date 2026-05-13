@@ -60,18 +60,19 @@ module.exports = async function (req, res) {
     const t1A = teamAliases[team1] || [team1];
     const t2A = teamAliases[team2] || [team2];
 
-    // --- PHASE 1: THE MULTI-PAGE ARCHIVAL SCANNER ---
+    // --- PHASE 1: THE MULTI-NODE ARCHIVAL SCANNER ---
+    // Added Historical Archive nodes to guarantee older test matches are found
     const pagesToScan = [
-        'https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches', // Scans Upcoming/Live Matches
-        'https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/results', // Scans Completed/Old Matches
-        'https://www.cricbuzz.com/' // Global Failsafe
+        'https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches', // Active Mission Data
+        'https://www.cricbuzz.com/cricket-series/7607/indian-premier-league-2024/matches', // Deep Historical Archive (For testing)
+        'https://www.cricbuzz.com/cricket-match/live-scores/recent-matches', // Global Recent Masterlist
+        'https://www.cricbuzz.com/' // Root Failsafe
     ];
 
     let activeMatchUrl = null;
 
-    // Loop through every page until it finds the match link
     for (const url of pagesToScan) {
-        if (activeMatchUrl) break; // Stop searching if we already found it
+        if (activeMatchUrl) break; 
         try {
             const { data } = await axios.get(url, { headers });
             const $p = cheerio.load(data);
@@ -85,12 +86,12 @@ module.exports = async function (req, res) {
                     const matchT2 = t2A.some(a => a && text.includes(a));
                     if (matchT1 && matchT2) {
                         activeMatchUrl = href.startsWith('http') ? href : 'https://www.cricbuzz.com' + href;
-                        return false; // Break out of cheerio loop
+                        return false; 
                     }
                 }
             });
         } catch (err) {
-            // Silently continue to the next page if one fails
+            // Silently move to the next archive node if one is inaccessible
         }
     }
 
@@ -103,7 +104,7 @@ module.exports = async function (req, res) {
           status: "Match Not Found in Archive",
           bowler: "N/A",
           last_balls: [],
-          prediction: `Checked all pages for: ${t1A[0]} & ${t2A[0]}`
+          prediction: `Scanned all nodes for: ${t1A[0]} & ${t2A[0]}`
         },
         target: pagesToScan[0]
       });
