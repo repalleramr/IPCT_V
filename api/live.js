@@ -34,41 +34,36 @@ module.exports = async function (req, res) {
 
         $series('a[href*="/live-cricket-scores/"]').each((i, el) => {
             const linkText = $series(el).text().toLowerCase();
-            const href = $series(el).attr('href').toLowerCase();
-            
-            // Check if the link text or URL contains both team names
-            if (t1 && (linkText.includes(t1) || href.includes(t1.replace(/ /g, '-'))) && 
-               (!t2 || linkText.includes(t2) || href.includes(t2.replace(/ /g, '-')))) {
+            if (t1 && linkText.includes(t1) && (!t2 || linkText.includes(t2))) {
                 activeMatchUrl = $series(el).attr('href');
-                return false; // Target Acquired, break loop
+                return false; // Target Acquired
             }
         });
     }
 
-    // DIRECTIVE 2: Ultimate Failsafe - Auto-lock on to REAL Live or Preview Match
+    // DIRECTIVE 2: Ultimate Brute Force Failsafe 
+    // If the selected match isn't found, find the first match that IS NOT finished yet.
     if (!activeMatchUrl) {
-        // Find the tag indicating a match is live, or about to start
-        const fallbackElement = $series('.cb-text-live').length > 0 ? $series('.cb-text-live').first() : $series('.cb-text-preview').first();
-        
-        if (fallbackElement.length > 0) {
-            // Traverse upwards to dynamically find the correct match link
-            let current = fallbackElement;
-            for(let i = 0; i < 6; i++) {
-                current = current.parent();
-                const link = current.find('a[href*="/live-cricket-scores/"]').attr('href');
-                if (link) {
-                    activeMatchUrl = link;
-                    break;
-                }
+        $series('a[href*="/live-cricket-scores/"]').each((i, el) => {
+            // We check the entire block of text surrounding the link
+            const matchBlockText = $series(el).closest('.cb-col-100, .cb-series-matches').text().toLowerCase();
+            const isCompleted = matchBlockText.includes('won by') || matchBlockText.includes('result') || matchBlockText.includes('abandoned');
+            
+            if (!isCompleted && !activeMatchUrl) {
+                activeMatchUrl = $series(el).attr('href');
             }
-        }
+        });
     }
 
-    // DIRECTIVE 3: If season is over or offline
+    // DIRECTIVE 3: Absolute Failsafe (Grab literally the first link if all else fails)
     if (!activeMatchUrl) {
+        activeMatchUrl = $series('a[href*="/live-cricket-scores/"]').first().attr('href');
+    }
+
+    if (!activeMatchUrl || activeMatchUrl === "undefined") {
         return res.status(200).json({
           success: true,
-          match_info: { title: "Target Missing", live_score: "Intel mismatch. Adjust mission parameters.", status: "Standby", bowler: "N/A" }
+          match_info: { title: "Target Missing", live_score: "Cricbuzz server is not responding with matches.", status: "Offline", bowler: "N/A" }
         });
     }
 
