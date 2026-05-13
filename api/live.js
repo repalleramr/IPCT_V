@@ -9,41 +9,60 @@ module.exports = async function (req, res) {
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  // The master series page you provided
   const SERIES_URL = 'https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches';
+  const HOME_URL = 'https://www.cricbuzz.com/';
 
-  // Read the Target Teams sent from your Android App
+  // Safely extract Target Teams
   let targetTeams = "";
-  if (req.url.includes('teams=')) {
-      targetTeams = decodeURIComponent(req.url.split('teams=')[1].split('&')[0]).toLowerCase();
-  }
+  try {
+      const urlObj = new URL(req.url, 'http://localhost');
+      targetTeams = urlObj.searchParams.get('teams') || "";
+      targetTeams = targetTeams.toLowerCase().replace(/\+/g, ' ');
+  } catch(e) {}
+
+  // MI6 Alias Dictionary: Catches every possible way Cricbuzz spells team names
+  const teamAliases = {
+      "chennai": ["csk", "chennai"],
+      "delhi": ["dc", "delhi"],
+      "gujarat": ["gt", "gujarat"],
+      "kolkata": ["kkr", "kolkata"],
+      "lucknow": ["lsg", "lucknow"],
+      "mumbai": ["mi", "mumbai"],
+      "punjab": ["pbks", "punjab", "kings"],
+      "rajasthan": ["rr", "rajasthan"],
+      "royal": ["rcb", "royal", "bengaluru", "bangalore"],
+      "sunrisers": ["srh", "sunrisers", "hyderabad"]
+  };
 
   try {
-    const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    };
-
-    const { data: seriesHtml } = await axios.get(SERIES_URL, { headers });
-    const $series = cheerio.load(seriesHtml);
+    const headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' };
     
     let activeMatchUrl = null;
     let matchState = "unknown"; 
     let fallbackResult = "Awaiting match timing...";
 
-    // --- PHASE 1: SERIES PAGE SCANNING ---
-    if (targetTeams) {
-        const teamParts = targetTeams.split(' vs ').map(t => t.trim());
-        const t1 = teamParts[0] ? teamParts[0].substring(0, 4) : ""; 
-        const t2 = teamParts[1] ? teamParts[1].substring(0, 4) : ""; 
+    const t1Word = targetTeams.split(' vs ')[0] ? targetTeams.split(' vs ')[0].trim().split(' ')[0] : "";
+    const t2Word = targetTeams.split(' vs ')[1] ? targetTeams.split(' vs ')[1].trim().split(' ')[0] : "";
 
+    const t1Aliases = teamAliases[t1Word] || [t1Word];
+    const t2Aliases = teamAliases[t2Word] || [t2Word];
+
+    const hasAlias = (text, aliases) => aliases.some(alias => alias && text.includes(alias));
+
+    // --- PHASE 1: SERIES PAGE SCANNING ---
+    try {
+        const { data: seriesHtml } = await axios.get(SERIES_URL, { headers });
+        const $series = cheerio.load(seriesHtml);
+        
         $series('.cb-col-100, .cb-series-matches').each((i, el) => {
             const text = $series(el).text().toLowerCase();
+            const href = $series(el).find('a[href*="cricket-score"]').first().attr('href') || "";
             
-            // If the block contains your targeted teams
-            if (t1 && text.includes(t1) && (!t2 || text.includes(t2))) {
-                const link = $series(el).find('a[href*="cricket-score"]').first().attr('href');
-                
-                // Determine exactly what state the match is in
+            // Check if BOTH teams are mentioned via ANY of their aliases (in text OR url)
+            const matchesT1 = hasAlias(text, t1Aliases) || hasAlias(href, t1Aliases);
+            const matchesT2 = hasAlias(text, t2Aliases) || hasAlias(href, t2Aliases);
+
+            if (targetTeams && matchesT1 && matchesT2) {
                 if ($series(el).find('.cb-text-complete').length > 0 || text.includes('won by') || text.includes('result')) {
                     matchState = "complete";
                     fallbackResult = $series(el).find('.cb-text-complete').text().trim() || "Match Ended";
@@ -52,21 +71,49 @@ module.exports = async function (req, res) {
                     fallbackResult = "In Progress";
                 } else {
                     matchState = "upcoming";
-                    // Grab the match timing/date directly from the series page
-                    fallbackResult = $series(el).find('.cb-text-preview').text().trim() || "Match Starting Soon";
+                    // Grab timing from either the preview or gray text block
+                    let timeText = $series(el).find('.cb-text-preview').text().trim();
+                    if (!timeText) timeText = $series(el).find('.text-gray').text().trim();
+                    fallbackResult = timeText || "Match Starting Soon";
                 }
 
-                if (link) {
-                    activeMatchUrl = link.startsWith('http') ? link : 'https://www.cricbuzz.com' + link;
-                }
-                
-                return false; // Break loop
+                if (href) activeMatchUrl = href.startsWith('http') ? href : 'https://www.cricbuzz.com' + href;
+                return false; 
             }
         });
+    } catch(e) {}
+
+    // --- PHASE 2: HOMEPAGE FALLBACK SCANNER ---
+    if (!activeMatchUrl && targetTeams) {
+        try {
+            const { data: homeHtml } = await axios.get(HOME_URL, { headers });
+            const $home = cheerio.load(homeHtml);
+            
+            $home('a[href*="/live-cricket-scores/"]').each((i, el) => {
+                const href = $home(el).attr('href').toLowerCase();
+                const text = $home(el).text().toLowerCase();
+                
+                const matchesT1 = hasAlias(text, t1Aliases) || hasAlias(href, t1Aliases);
+                const matchesT2 = hasAlias(text, t2Aliases) || hasAlias(href, t2Aliases);
+
+                if (matchesT1 && matchesT2) {
+                    activeMatchUrl = $home(el).attr('href');
+                    activeMatchUrl = activeMatchUrl.startsWith('http') ? activeMatchUrl : 'https://www.cricbuzz.com' + activeMatchUrl;
+                    
+                    if (text.includes('won by') || text.includes('result')) {
+                        matchState = "complete";
+                        fallbackResult = "Match Ended";
+                    } else {
+                        matchState = "live"; 
+                        fallbackResult = "In Progress";
+                    }
+                    return false;
+                }
+            });
+        } catch(e) {}
     }
 
-    // --- PHASE 2: YOUR REQUESTED LOGIC ---
-    // If no match has started, target the Series Link and return the timing!
+    // --- PHASE 3: OUTPUT ROUTING ---
     if (!activeMatchUrl || matchState === "upcoming" || matchState === "unknown") {
         return res.status(200).json({
           success: true,
@@ -74,15 +121,14 @@ module.exports = async function (req, res) {
           match_info: {
             title: "STANDBY MODE",
             live_score: "Awaiting First Ball",
-            status: fallbackResult !== "Awaiting match timing..." ? fallbackResult : "Check Dropdown Teams",
+            status: fallbackResult !== "Awaiting match timing..." ? fallbackResult : "No Match Timing Found",
             bowler: "Toss Pending / N/A"
           },
-          target: SERIES_URL // Safe fallback to the series page
+          target: SERIES_URL,
+          debug_scanned_aliases: `T1: ${t1Aliases.join('|')} --- T2: ${t2Aliases.join('|')}`
         });
     }
 
-    // --- PHASE 3: MATCH HAS STARTED (Live or Ended) ---
-    // Target the specific Match Link as requested
     if (activeMatchUrl.includes('/cricket-scores/') && !activeMatchUrl.includes('/live-cricket-scores/')) {
         activeMatchUrl = activeMatchUrl.replace('/cricket-scores/', '/live-cricket-scores/');
     }
@@ -96,12 +142,10 @@ module.exports = async function (req, res) {
     let finalStatus = $('.cb-text-complete, .cb-text-live, .cb-min-stts').first().text().trim() || fallbackResult;
 
     if (matchState === "complete" || finalStatus.toLowerCase().includes('won by') || finalStatus.toLowerCase().includes('result')) {
-        // Show result for ended matches
         scoreFromTitle = finalStatus; 
         finalStatus = "Match Ended";
         bInfo = "Mission Accomplished";
     } else {
-        // Scrape Live Bowler
         const bRow = $('.cb-min-bwl-rw').first();
         if (bRow.length > 0) {
             const name = bRow.find('a').first().text().trim();
@@ -125,7 +169,7 @@ module.exports = async function (req, res) {
         status: finalStatus,
         bowler: bInfo
       },
-      target: activeMatchUrl // Targets the live match link!
+      target: activeMatchUrl
     });
 
   } catch (error) {
