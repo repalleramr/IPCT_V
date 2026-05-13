@@ -20,7 +20,6 @@ module.exports = async function (req, res) {
       targetTeams = String(targetTeams).toLowerCase().replace(/\+/g, ' ').trim();
   } catch (e) {}
 
-  // 2. BLANK TRANSMISSION DETECTOR
   if (!targetTeams || targetTeams === "undefined" || targetTeams === "null" || targetTeams === "vs") {
       return res.status(200).json({
           success: true,
@@ -36,18 +35,18 @@ module.exports = async function (req, res) {
       });
   }
 
-  // IPCT Alias Dictionary
+  // IPCT Bidirectional Alias Dictionary (Now supports both full names and abbreviations as inputs)
   const teamAliases = {
-    "chennai": ["csk", "chennai"],
-    "delhi": ["dc", "delhi"],
-    "gujarat": ["gt", "gujarat"],
-    "kolkata": ["kkr", "kolkata", "kol"],
-    "lucknow": ["lsg", "lucknow"],
-    "mumbai": ["mi", "mumbai"],
-    "punjab": ["pbks", "punjab", "kings"],
-    "rajasthan": ["rr", "rajasthan"],
-    "royal": ["rcb", "royal", "bengaluru", "bangalore", "blr"],
-    "sunrisers": ["srh", "sunrisers", "hyderabad"]
+    "chennai": ["csk", "chennai"], "csk": ["csk", "chennai"],
+    "delhi": ["dc", "delhi"], "dc": ["dc", "delhi"],
+    "gujarat": ["gt", "gujarat"], "gt": ["gt", "gujarat"],
+    "kolkata": ["kkr", "kolkata", "kol"], "kkr": ["kkr", "kolkata", "kol"],
+    "lucknow": ["lsg", "lucknow"], "lsg": ["lsg", "lucknow"],
+    "mumbai": ["mi", "mumbai"], "mi": ["mi", "mumbai"],
+    "punjab": ["pbks", "punjab", "kings"], "pbks": ["pbks", "punjab", "kings"],
+    "rajasthan": ["rr", "rajasthan"], "rr": ["rr", "rajasthan"],
+    "royal": ["rcb", "royal", "bengaluru", "bangalore", "blr"], "rcb": ["rcb", "royal", "bengaluru", "bangalore", "blr"],
+    "sunrisers": ["srh", "sunrisers", "hyderabad"], "srh": ["srh", "sunrisers", "hyderabad"]
   };
 
   try {
@@ -55,7 +54,6 @@ module.exports = async function (req, res) {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     };
     
-    // Parse the two teams securely
     let team1 = targetTeams.split(' vs ')[0] ? targetTeams.split(' vs ')[0].trim().split(' ')[0] : "";
     let team2 = targetTeams.split(' vs ')[1] ? targetTeams.split(' vs ')[1].trim().split(' ')[0] : "";
 
