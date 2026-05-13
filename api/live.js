@@ -31,19 +31,17 @@ module.exports = async function (req, res) {
     // --- PHASE 1: TARGETED SEARCH WITH STATUS CHECK ---
     $series('.cb-series-matches').each((i, el) => {
         const text = $series(el).text().toLowerCase();
-        const linkElem = $series(el).find('a[href*="/live-cricket-scores/"]').first();
+        
+        // BUG FIX: Look for ANY cricket score link, not just "live" ones
+        const linkElem = $series(el).find('a[href*="cricket-scores"]').first();
         const href = linkElem.attr('href');
         
         if (!href) return;
         
-        // Strict Status Checks using Cricbuzz's internal HTML classes
-        const isLive = $series(el).find('.cb-text-live').length > 0;
-        const isPreview = $series(el).find('.cb-text-preview').length > 0;
-        const isComplete = $series(el).find('.cb-text-complete').length > 0 || text.includes('won by');
+        const isComplete = $series(el).find('.cb-text-complete').length > 0 || text.includes('won by') || text.includes('result');
 
         // Check if this block matches the teams you selected
         if (targetTeams) {
-            // Extract just the first word of each team (e.g. "royal" and "kolkata") for a foolproof match
             const t1 = targetTeams.split(' vs ')[0].trim().split(' ')[0]; 
             const t2 = targetTeams.split(' vs ')[1] ? targetTeams.split(' vs ')[1].trim().split(' ')[0] : ""; 
             
@@ -55,8 +53,8 @@ module.exports = async function (req, res) {
             }
         }
 
-        // If targeted search misses, save the very first Live or Preview match as a backup
-        if (!fallbackUrl && !isComplete && (isLive || isPreview)) {
+        // Keep the very first unfinished match as a backup
+        if (!fallbackUrl && !isComplete) {
             fallbackUrl = href;
         }
     });
@@ -74,6 +72,11 @@ module.exports = async function (req, res) {
     }
 
     if (!activeMatchUrl.startsWith('http')) activeMatchUrl = 'https://www.cricbuzz.com' + activeMatchUrl;
+
+    // Force the link into the "Live Scorecard" format for when the match actually starts
+    if (activeMatchUrl.includes('/cricket-scores/') && !activeMatchUrl.includes('/live-cricket-scores/')) {
+        activeMatchUrl = activeMatchUrl.replace('/cricket-scores/', '/live-cricket-scores/');
+    }
 
     // --- PHASE 3: DATA EXTRACTION ---
     const { data: matchHtml } = await axios.get(activeMatchUrl, { headers });
@@ -98,7 +101,7 @@ module.exports = async function (req, res) {
         }
     }
 
-    const liveStatus = $('.cb-text-live, .cb-text-preview, .cb-min-stts').first().text().trim() || "Status Unknown";
+    const liveStatus = $('.cb-text-live, .cb-text-preview, .cb-min-stts').first().text().trim() || "Match starting soon...";
 
     res.status(200).json({
       success: true,
