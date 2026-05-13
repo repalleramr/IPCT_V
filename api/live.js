@@ -2,14 +2,12 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 
 module.exports = async function (req, res) {
-  // CORS Headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  // The Master Series Page for IPL 2026
   const SERIES_URL = 'https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches';
 
   try {
@@ -17,98 +15,66 @@ module.exports = async function (req, res) {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     };
 
-    // 1. STEP ONE: Ping the Series Page
+    // 1. Scan Series Page for the REAL active mission
     const { data: seriesHtml } = await axios.get(SERIES_URL, { headers });
     const $series = cheerio.load(seriesHtml);
-
     let activeMatchUrl = null;
 
-    // 2. STEP TWO: Hunt for the active "Live" Match
-    $series('.cb-text-live, .cb-text-preview').each((i, el) => {
-        const parentCard = $series(el).closest('.cb-col-100, .cb-series-matches');
-        const link = parentCard.find('a[href*="/live-cricket-scores/"]').attr('href') || parentCard.find('a').attr('href');
+    $series('.cb-series-matches').each((i, el) => {
+        const text = $series(el).text().toLowerCase();
+        const link = $series(el).find('a[href*="/live-cricket-scores/"]').attr('href');
         
-        if (link && !activeMatchUrl && link.includes('cricket-scores')) {
+        // PROTOCOL: Skip matches that are already finished (Results)
+        const isFinished = text.includes('won by') || text.includes('result') || text.includes('abandoned');
+        
+        if (link && !isFinished && !activeMatchUrl) {
             activeMatchUrl = link;
         }
     });
 
-    // Fallback: If no live tag is found, grab the first available match link
+    // Fallback: If everything is finished or not started, just grab the first non-archived link
     if (!activeMatchUrl) {
-        $series('a[href*="/live-cricket-scores/"]').each((i, el) => {
-            const href = $series(el).attr('href');
-            if (href && !href.includes('archives') && !activeMatchUrl) {
-                 activeMatchUrl = href; 
-            }
-        });
+        activeMatchUrl = $series('a[href*="/live-cricket-scores/"]').first().attr('href');
     }
 
-    // If absolutely no matches are found
-    if (!activeMatchUrl) {
-        return res.status(200).json({
-          success: true,
-          timestamp: new Date().toISOString(),
-          match_info: {
-            title: "Series Target Offline",
-            live_score: "Awaiting Live Action",
-            status: "No active IPL match found right now.",
-            bowler: "Standby..."
-          }
-        });
-    }
+    if (!activeMatchUrl.startsWith('http')) activeMatchUrl = 'https://www.cricbuzz.com' + activeMatchUrl;
 
-    // Ensure it's a full URL
-    if (!activeMatchUrl.startsWith('http')) {
-        activeMatchUrl = 'https://www.cricbuzz.com' + activeMatchUrl;
-    }
-
-    // 3. STEP THREE: Scrape the specific match we just found
+    // 2. Scrape the Target Match
     const { data: matchHtml } = await axios.get(activeMatchUrl, { headers });
     const $ = cheerio.load(matchHtml);
 
-    // Title Score Extractor
+    // Score from Browser Title (Very stable)
     const pageTitle = $('title').text();
-    let scoreFromTitle = pageTitle.includes('-') ? pageTitle.split('-')[0].trim() : "Fetching Score...";
+    let scoreFromTitle = pageTitle.includes('-') ? pageTitle.split('-')[0].trim() : "Pre-Match Intel";
 
-    // Deep Scan Bowler Extractor
-    let bowlerInfo = "";
-    const bowlerRow = $('.cb-min-bwl-rw').first();
+    // DEEP SCAN BOWLER (Checks 3 different locations)
+    let bInfo = "Scanning Field...";
     
-    if (bowlerRow.length > 0) {
-        const name = bowlerRow.find('.cb-text-link, a').first().text().trim();
-        const overs = bowlerRow.find('.cb-col-10, .cb-col-8').eq(0).text().trim();
-        const runs = bowlerRow.find('.cb-col-10, .cb-col-8').eq(2).text().trim();
-        const wkts = bowlerRow.find('.cb-col-10, .cb-col-8').eq(3).text().trim();
-        
-        if (name) bowlerInfo = `${name} [${wkts}/${runs} in ${overs} ov]`;
+    // Check Location A: Live mini-row
+    const bRow = $('.cb-min-bwl-rw').first();
+    if (bRow.length > 0) {
+        const name = bRow.find('a').first().text().trim();
+        const stats = bRow.text().replace(name, '').replace(/\s+/g, ' ').trim();
+        if (name) bInfo = `${name} (${stats})`;
+    } else {
+        // Check Location B: Statistics Tables
+        const bStats = $('.cb-col-50').filter((i, e) => $(e).text().toLowerCase().includes('ov')).first();
+        const bName = bStats.prev().text().trim();
+        if (bName && bName.length < 25) bInfo = bName + " (On Deck)";
     }
 
-    if (!bowlerInfo) {
-        $('div, span').each((i, el) => {
-            if ($(el).text().trim() === 'Bowler') {
-                const foundName = $(el).parent().next().find('a').first().text().trim();
-                if (foundName) {
-                    bowlerInfo = foundName + " (Active)";
-                    return false;
-                }
-            }
-        });
-    }
-
-    if (!bowlerInfo) bowlerInfo = "Analyzing Field Assets...";
-
-    const liveStatus = $('.cb-text-live, .cb-text-complete, .cb-min-stts').first().text().trim() || "In Progress";
+    const liveStatus = $('.cb-text-live, .cb-min-stts').first().text().trim() || "Standby";
 
     res.status(200).json({
       success: true,
       timestamp: new Date().toISOString(),
       match_info: {
-        title: "IPL 2026 LIVE",
+        title: "IPL 2026 MISSION",
         live_score: scoreFromTitle,
         status: liveStatus,
-        bowler: bowlerInfo
+        bowler: bInfo
       },
-      debug_target_url: activeMatchUrl // This helps you see exactly which match the bot found
+      target: activeMatchUrl
     });
 
   } catch (error) {
