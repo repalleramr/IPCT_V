@@ -3,15 +3,11 @@ const cheerio = require('cheerio');
 
 module.exports = async function (req, res) {
 
-  // =========================
-  // HEADERS
-  // =========================
-
   res.setHeader('Access-Control-Allow-Origin', '*');
 
   res.setHeader(
     'Cache-Control',
-    'no-store, max-age=0'
+    'no-store'
   );
 
   try {
@@ -20,19 +16,8 @@ module.exports = async function (req, res) {
     // GET TEAMS
     // =========================
 
-    let teams = req.query.teams || "";
-
-    if (
-      !teams &&
-      req.url &&
-      req.url.includes('teams=')
-    ) {
-
-      teams = decodeURIComponent(
-        req.url.split('teams=')[1]
-          .split('&')[0]
-      );
-    }
+    let teams =
+      req.query.teams || "";
 
     if (!teams) {
 
@@ -44,44 +29,8 @@ module.exports = async function (req, res) {
       });
     }
 
-    teams = teams.toLowerCase();
-
-    // =========================
-    // TEAM ALIASES
-    // =========================
-
-    const aliases = {
-
-      "mumbai indians":
-        ["mi", "mumbai"],
-
-      "chennai super kings":
-        ["csk", "chennai"],
-
-      "royal challengers bengaluru":
-        ["rcb", "bengaluru", "bangalore"],
-
-      "kolkata knight riders":
-        ["kkr", "kolkata"],
-
-      "delhi capitals":
-        ["dc", "delhi"],
-
-      "gujarat titans":
-        ["gt", "gujarat"],
-
-      "lucknow super giants":
-        ["lsg", "lucknow"],
-
-      "punjab kings":
-        ["pbks", "punjab"],
-
-      "rajasthan royals":
-        ["rr", "rajasthan"],
-
-      "sunrisers hyderabad":
-        ["srh", "hyderabad", "sunrisers"]
-    };
+    teams =
+      teams.toLowerCase();
 
     // =========================
     // IPL PAGE
@@ -110,7 +59,8 @@ module.exports = async function (req, res) {
     const $ =
       cheerio.load(page.data);
 
-    let matchUrl = null;
+    let matchUrl =
+      null;
 
     // =========================
     // FIND MATCH
@@ -136,28 +86,19 @@ module.exports = async function (req, res) {
         if (t.length >= 2) {
 
           const t1 =
-            t[0].trim().toLowerCase();
+            t[0]
+              .trim()
+              .split(' ')[0];
 
           const t2 =
-            t[1].trim().toLowerCase();
+            t[1]
+              .trim()
+              .split(' ')[0];
 
-          const t1Aliases =
-            aliases[t1] || [t1];
-
-          const t2Aliases =
-            aliases[t2] || [t2];
-
-          const hasT1 =
-            t1Aliases.some(a =>
-              text.includes(a)
-            );
-
-          const hasT2 =
-            t2Aliases.some(a =>
-              text.includes(a)
-            );
-
-          if (hasT1 && hasT2) {
+          if (
+            text.includes(t1) &&
+            text.includes(t2)
+          ) {
 
             matchUrl =
               'https://www.cricbuzz.com' +
@@ -179,7 +120,8 @@ module.exports = async function (req, res) {
 
         success: false,
 
-        error: "IPL match not found"
+        error:
+          'Match not found'
       });
     }
 
@@ -197,245 +139,120 @@ module.exports = async function (req, res) {
         ? idMatch[1]
         : null;
 
+    if (!matchId) {
+
+      return res.status(200).json({
+
+        success: false,
+
+        error:
+          'Match ID missing'
+      });
+    }
+
     // =========================
-    // FETCH MATCH PAGE
+    // COMMENTARY API
     // =========================
 
-    const match =
+    const commentaryUrl =
+      `https://www.cricbuzz.com/api/cricket-match/commentary/${matchId}`;
+
+    const commentary =
       await axios.get(
 
-        matchUrl,
+        commentaryUrl,
 
         {
 
           headers: {
 
             'User-Agent':
-              'Mozilla/5.0'
+              'Mozilla/5.0',
+
+            'Accept':
+              'application/json'
           },
 
           timeout: 10000
         }
       );
 
-    const html =
-      match.data;
-
-    const $m =
-      cheerio.load(html);
+    const data =
+      commentary.data;
 
     // =========================
-    // SCORE
-    // =========================
-
-    let score =
-      'Score unavailable';
-
-    const possibleSelectors = [
-
-      '.cb-min-bat-rw',
-
-      '.cb-font-20',
-
-      '.cb-scrs-wrp',
-
-      '.cb-col-100',
-
-      '.cb-lv-scrs-col',
-
-      '.cb-text-live'
-    ];
-
-    for (const sel of possibleSelectors) {
-
-      const txt =
-        $m(sel)
-          .text()
-          .trim();
-
-      const found =
-        txt.match(
-          /\d{2,3}\/\d{1,2}/
-        );
-
-      if (found) {
-
-        score = found[0];
-
-        break;
-      }
-    }
-
-    // =========================
-    // FALLBACK SCORE
+    // SAFETY
     // =========================
 
     if (
-      score ===
-      'Score unavailable'
+      !data ||
+      !data.commentaryList
     ) {
 
-      const bodyText =
-        $m('body')
-          .text()
-          .replace(/\s+/g, ' ');
+      return res.status(200).json({
 
-      const allScores =
-        bodyText.match(
-          /\d{2,3}\/\d{1,2}/g
-        );
+        success: false,
 
-      if (
-        allScores &&
-        allScores.length
-      ) {
+        error:
+          'No commentary data'
+      });
+    }
 
-        score =
-          allScores.sort((a, b) => {
+    // =========================
+    // LATEST BALL
+    // =========================
 
-            return (
-              parseInt(
-                b.split('/')[0]
-              ) -
+    const latest =
+      data.commentaryList[0] || {};
 
-              parseInt(
-                a.split('/')[0]
-              )
-            );
+    // =========================
+    // LIVE VALUES
+    // =========================
 
-          })[0];
-      }
+    const liveScore =
+      latest.score ||
+      'Match not started';
+
+    const overs =
+      latest.overNumber ||
+      '0.0';
+
+    const striker =
+      latest.batsmanStriker ||
+      'Unavailable';
+
+    const nonStriker =
+      latest.batsmanNonStriker ||
+      'Unavailable';
+
+    const bowler =
+      latest.bowler ||
+      'Unavailable';
+
+    const lastBall =
+      latest.event ||
+      '-';
+
+    let lastOver =
+      [];
+
+    if (
+      latest.overSummary
+    ) {
+
+      lastOver =
+        latest.overSummary
+          .split(' ');
     }
 
     // =========================
     // STATUS
     // =========================
 
-    let status =
+    const status =
+      data.matchHeader
+        ?.status ||
       'Live';
-
-    const statusSelectors = [
-
-      '.cb-text-live',
-
-      '.cb-status-msg',
-
-      '.cb-text-complete',
-
-      '.cb-mini-status'
-    ];
-
-    for (const sel of statusSelectors) {
-
-      const txt =
-        $m(sel)
-          .first()
-          .text()
-          .trim();
-
-      if (txt) {
-
-        status = txt;
-
-        break;
-      }
-    }
-
-    // =========================
-    // COMMENTARY
-    // =========================
-
-    let striker =
-      'Unavailable';
-
-    let nonStriker =
-      'Unavailable';
-
-    let bowler =
-      'Unavailable';
-
-    let overs =
-      '0.0';
-
-    let lastBall =
-      '-';
-
-    let lastOver =
-      [];
-
-    try {
-
-      if (matchId) {
-
-        const commentaryUrl =
-          `https://www.cricbuzz.com/api/cricket-match/commentary/${matchId}`;
-
-        const commentary =
-          await axios.get(
-
-            commentaryUrl,
-
-            {
-
-              headers: {
-
-                'User-Agent':
-                  'Mozilla/5.0'
-              },
-
-              timeout: 10000
-            }
-          );
-
-        const data =
-          commentary.data;
-
-        // Attempt parsing
-        if (
-          data &&
-          data.commentaryList &&
-          data.commentaryList.length
-        ) {
-
-          const latest =
-            data.commentaryList[0];
-
-          striker =
-            latest.batsmanStriker ||
-            striker;
-
-          nonStriker =
-            latest.batsmanNonStriker ||
-            nonStriker;
-
-          bowler =
-            latest.bowler ||
-            bowler;
-
-          overs =
-            latest.overNumber ||
-            overs;
-
-          lastBall =
-            latest.event ||
-            '-';
-
-          if (
-            latest.overSummary
-          ) {
-
-            lastOver =
-              latest.overSummary
-                .split(' ');
-          }
-        }
-      }
-
-    }
-    catch (e) {
-
-      // Commentary fail silently
-    }
 
     // =========================
     // PREDICTION
@@ -445,13 +262,13 @@ module.exports = async function (req, res) {
       'Balanced';
 
     if (
-      score &&
-      score.includes('/')
+      typeof liveScore === 'string' &&
+      liveScore.includes('/')
     ) {
 
       const runs =
         parseInt(
-          score.split('/')[0]
+          liveScore.split('/')[0]
         );
 
       if (runs >= 200) {
@@ -482,10 +299,12 @@ module.exports = async function (req, res) {
       match_info: {
 
         title:
+          data.matchHeader
+            ?.matchDescription ||
           'IPL LIVE INTEL',
 
         live_score:
-          score,
+          liveScore,
 
         overs:
           overs,
