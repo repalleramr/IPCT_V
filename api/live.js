@@ -32,31 +32,43 @@ module.exports = async function (req, res) {
         const t1 = teamParts[0];
         const t2 = teamParts[1] || ""; 
 
-        $series('.cb-col-100, .cb-series-matches').each((i, el) => {
-            const blockText = $series(el).text().toLowerCase();
-            // If this match block contains both your selected team names
-            if (t1 && blockText.includes(t1) && blockText.includes(t2)) {
-                const link = $series(el).find('a[href*="/live-cricket-scores/"]').attr('href');
-                if (link) {
-                    activeMatchUrl = link;
-                    return false; // Target Acquired, break the loop
-                }
+        $series('a[href*="/live-cricket-scores/"]').each((i, el) => {
+            const linkText = $series(el).text().toLowerCase();
+            const href = $series(el).attr('href').toLowerCase();
+            
+            // Check if the link text or URL contains both team names
+            if (t1 && (linkText.includes(t1) || href.includes(t1.replace(/ /g, '-'))) && 
+               (!t2 || linkText.includes(t2) || href.includes(t2.replace(/ /g, '-')))) {
+                activeMatchUrl = $series(el).attr('href');
+                return false; // Target Acquired, break loop
             }
         });
     }
 
-    // DIRECTIVE 2: Failsafe to live/next match if no target was sent
+    // DIRECTIVE 2: Ultimate Failsafe - Auto-lock on to REAL Live or Preview Match
     if (!activeMatchUrl) {
-        const liveElement = $series('.cb-text-live, .cb-text-preview').first();
-        if (liveElement.length > 0) {
-            activeMatchUrl = liveElement.closest('div.cb-col-100').find('a[href*="/live-cricket-scores/"]').attr('href');
+        // Find the tag indicating a match is live, or about to start
+        const fallbackElement = $series('.cb-text-live').length > 0 ? $series('.cb-text-live').first() : $series('.cb-text-preview').first();
+        
+        if (fallbackElement.length > 0) {
+            // Traverse upwards to dynamically find the correct match link
+            let current = fallbackElement;
+            for(let i = 0; i < 6; i++) {
+                current = current.parent();
+                const link = current.find('a[href*="/live-cricket-scores/"]').attr('href');
+                if (link) {
+                    activeMatchUrl = link;
+                    break;
+                }
+            }
         }
     }
 
+    // DIRECTIVE 3: If season is over or offline
     if (!activeMatchUrl) {
         return res.status(200).json({
           success: true,
-          match_info: { title: "Target Missing", live_score: "Could not locate this match on server.", status: "Standby", bowler: "N/A" }
+          match_info: { title: "Target Missing", live_score: "Intel mismatch. Adjust mission parameters.", status: "Standby", bowler: "N/A" }
         });
     }
 
