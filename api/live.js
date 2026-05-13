@@ -31,11 +31,11 @@ module.exports = async function (req, res) {
               last_balls: [],
               prediction: "Please re-select from Dropdown"
           },
-          target: "https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches"
+          target: "https://www.cricbuzz.com"
       });
   }
 
-  // IPCT Bidirectional Alias Dictionary (Now supports both full names and abbreviations as inputs)
+  // IPCT Bidirectional Alias Dictionary
   const teamAliases = {
     "chennai": ["csk", "chennai"], "csk": ["csk", "chennai"],
     "delhi": ["dc", "delhi"], "dc": ["dc", "delhi"],
@@ -60,43 +60,38 @@ module.exports = async function (req, res) {
     const t1A = teamAliases[team1] || [team1];
     const t2A = teamAliases[team2] || [team2];
 
-    const SERIES_URL = 'https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches';
+    // --- PHASE 1: THE MULTI-PAGE ARCHIVAL SCANNER ---
+    const pagesToScan = [
+        'https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches', // Scans Upcoming/Live Matches
+        'https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/results', // Scans Completed/Old Matches
+        'https://www.cricbuzz.com/' // Global Failsafe
+    ];
+
     let activeMatchUrl = null;
 
-    // --- PHASE 1: THE HYBRID RADAR ---
-    const { data: seriesHtml } = await axios.get(SERIES_URL, { headers });
-    const $series = cheerio.load(seriesHtml);
-
-    // Scan text blocks
-    $series('.cb-series-matches, .cb-col-100, .cb-mtch-lst-rt').each((i, el) => {
-      const text = $series(el).text().toLowerCase();
-      const matchT1 = t1A.some(a => a && text.includes(a));
-      const matchT2 = t2A.some(a => a && text.includes(a));
-      
-      if (matchT1 && matchT2) {
-        const href = $series(el).find('a[href*="cricket-score"], a[href*="live-cricket"]').first().attr('href');
-        if (href) {
-            activeMatchUrl = href.startsWith('http') ? href : 'https://www.cricbuzz.com' + href;
-            return false;
+    // Loop through every page until it finds the match link
+    for (const url of pagesToScan) {
+        if (activeMatchUrl) break; // Stop searching if we already found it
+        try {
+            const { data } = await axios.get(url, { headers });
+            const $p = cheerio.load(data);
+            
+            $p('a').each((i, el) => {
+                const href = $p(el).attr('href') || "";
+                const text = $p(el).text().toLowerCase() + " " + href.toLowerCase();
+                
+                if (href.includes('cricket-score') || href.includes('match') || href.includes('live-cricket')) {
+                    const matchT1 = t1A.some(a => a && text.includes(a));
+                    const matchT2 = t2A.some(a => a && text.includes(a));
+                    if (matchT1 && matchT2) {
+                        activeMatchUrl = href.startsWith('http') ? href : 'https://www.cricbuzz.com' + href;
+                        return false; // Break out of cheerio loop
+                    }
+                }
+            });
+        } catch (err) {
+            // Silently continue to the next page if one fails
         }
-      }
-    });
-
-    // Failsafe Link Scanner
-    if (!activeMatchUrl) {
-      $series('a').each((i, el) => {
-        const href = $series(el).attr('href') || "";
-        const text = $series(el).text().toLowerCase() + " " + href.toLowerCase();
-        
-        if (href.includes('cricket-score') || href.includes('match')) {
-            const matchT1 = t1A.some(a => a && text.includes(a));
-            const matchT2 = t2A.some(a => a && text.includes(a));
-            if (matchT1 && matchT2) {
-                activeMatchUrl = href.startsWith('http') ? href : 'https://www.cricbuzz.com' + href;
-                return false;
-            }
-        }
-      });
     }
 
     if (!activeMatchUrl) {
@@ -105,12 +100,12 @@ module.exports = async function (req, res) {
         match_info: {
           title: "IPCT STANDBY",
           live_score: "Intel Offline",
-          status: "Match Not Found in Matrix",
+          status: "Match Not Found in Archive",
           bowler: "N/A",
           last_balls: [],
-          prediction: `Scanned for: ${t1A[0]} & ${t2A[0]}`
+          prediction: `Checked all pages for: ${t1A[0]} & ${t2A[0]}`
         },
-        target: SERIES_URL
+        target: pagesToScan[0]
       });
     }
 
