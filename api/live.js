@@ -32,7 +32,7 @@ module.exports = async function (req, res) {
     
     let activeMatchUrl = null;
     let matchState = "upcoming";
-    let timingStr = "Upcoming Match";
+    let matchStatusText = "Upcoming Match";
 
     const team1 = targetTeams.split(' vs ')[0] ? targetTeams.split(' vs ')[0].trim().split(' ')[0] : "";
     const team2 = targetTeams.split(' vs ')[1] ? targetTeams.split(' vs ')[1].trim().split(' ')[0] : "";
@@ -43,33 +43,60 @@ module.exports = async function (req, res) {
 
     $series('.cb-series-matches').each((i, el) => {
         const text = $series(el).text().toLowerCase();
+        
         if (targetTeams && hasAlias(text, t1A) && hasAlias(text, t2A)) {
             const href = $series(el).find('a[href*="cricket-score"]').first().attr('href');
             if (href) activeMatchUrl = href.startsWith('http') ? href : 'https://www.cricbuzz.com' + href;
             
-            if ($series(el).find('.cb-text-live').length > 0) matchState = "live";
-            else if ($series(el).find('.cb-text-complete').length > 0 || text.includes('won by')) matchState = "complete";
+            // State Detection
+            if ($series(el).find('.cb-text-complete').length > 0 || text.includes('won by')) {
+                matchState = "complete";
+                matchStatusText = $series(el).find('.cb-text-complete').first().text().trim() || "Match Ended";
+            } else if ($series(el).find('.cb-text-live').length > 0) {
+                matchState = "live";
+                matchStatusText = $series(el).find('.cb-text-live').first().text().trim();
+            } else {
+                matchState = "upcoming";
+                matchStatusText = $series(el).find('.cb-text-preview, .text-gray').first().text().trim() || "Match Starting Soon";
+            }
             
-            timingStr = $series(el).find('.cb-text-preview, .cb-text-complete, .text-gray').first().text().trim() || "Live Now";
-            return false;
+            return false; // Target found, break loop
         }
     });
 
+    // --- STATE 1: MATCH NOT STARTED ---
     if (!activeMatchUrl || matchState === "upcoming") {
         return res.status(200).json({
             success: true,
             match_info: { 
                 title: "IPCT STANDBY", 
                 live_score: "Pre-Match Intel", 
-                status: timingStr, 
+                status: matchStatusText, 
                 bowler: "N/A", 
                 last_balls: [], 
                 prediction: "Waiting for Toss" 
             },
-            target: SERIES_URL
+            target: SERIES_URL // Point to Schedule
         });
     }
 
+    // --- STATE 2: MATCH COMPLETED ---
+    if (matchState === "complete") {
+         return res.status(200).json({
+            success: true,
+            match_info: { 
+                title: "MISSION ACCOMPLISHED", 
+                live_score: "Match Finalized", 
+                status: matchStatusText, // Automatically outputs "Team X won by Y runs"
+                bowler: "Data Archived", 
+                last_balls: ["E", "N", "D", "E", "D"], 
+                prediction: "Match Finished" 
+            },
+            target: activeMatchUrl // Point to specific match scorecard
+        });
+    }
+
+    // --- STATE 3: MATCH IS LIVE ---
     const commUrl = activeMatchUrl.replace('/cricket-scores/', '/live-cricket-scores/');
     const { data: matchHtml } = await axios.get(commUrl, { headers });
     const $ = cheerio.load(matchHtml);
@@ -90,13 +117,15 @@ module.exports = async function (req, res) {
       match_info: {
         title: "IPCT TARGET LOCKED",
         live_score: $('title').text().split('|')[0].trim(),
-        status: $('.cb-text-live, .cb-min-stts').first().text().trim() || timingStr,
+        status: $('.cb-text-live, .cb-min-stts').first().text().trim() || matchStatusText,
         bowler: $('.cb-min-bwl-rw').first().find('a').first().text().trim() || "N/A",
         last_balls: ballHistory,
         prediction: pred
       },
-      target: activeMatchUrl
+      target: activeMatchUrl // Point to live commentary
     });
 
-  } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+  } catch (error) { 
+    res.status(500).json({ success: false, error: error.message }); 
+  }
 };
