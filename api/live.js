@@ -32,7 +32,7 @@ module.exports = async function (req, res) {
     
     let activeMatchUrl = null;
     let matchState = "upcoming";
-    let timingStr = "Check Schedule";
+    let timingStr = "Upcoming Match";
 
     const team1 = targetTeams.split(' vs ')[0] ? targetTeams.split(' vs ')[0].trim().split(' ')[0] : "";
     const team2 = targetTeams.split(' vs ')[1] ? targetTeams.split(' vs ')[1].trim().split(' ')[0] : "";
@@ -50,7 +50,7 @@ module.exports = async function (req, res) {
             if ($series(el).find('.cb-text-live').length > 0) matchState = "live";
             else if ($series(el).find('.cb-text-complete').length > 0 || text.includes('won by')) matchState = "complete";
             
-            timingStr = $series(el).find('.cb-text-preview, .cb-text-complete').first().text().trim() || "Live Now";
+            timingStr = $series(el).find('.cb-text-preview, .cb-text-complete, .text-gray').first().text().trim() || "Live Now";
             return false;
         }
     });
@@ -58,7 +58,15 @@ module.exports = async function (req, res) {
     if (!activeMatchUrl || matchState === "upcoming") {
         return res.status(200).json({
             success: true,
-            match_info: { title: "IPCT STANDBY", score: "Pre-Match Intel", status: timingStr, bowler: "N/A", last_balls: [], prediction: "Waiting for Toss" }
+            match_info: { 
+                title: "IPCT STANDBY", 
+                live_score: "Pre-Match Intel", 
+                status: timingStr, 
+                bowler: "N/A", 
+                last_balls: [], 
+                prediction: "Waiting for Toss" 
+            },
+            target: SERIES_URL
         });
     }
 
@@ -66,28 +74,28 @@ module.exports = async function (req, res) {
     const { data: matchHtml } = await axios.get(commUrl, { headers });
     const $ = cheerio.load(matchHtml);
 
-    // Ball-by-Ball Extractor (Last 12 Balls)
     let ballHistory = [];
     $('.cb-col-10.cb-font-12').each((i, el) => {
         if (i < 12) ballHistory.push($(el).text().trim());
     });
 
-    // Prediction Logic (Momentum)
     let last6 = ballHistory.slice(0, 6);
     let runs = 0; let wkts = 0;
     last6.forEach(b => { if(b === 'W') wkts++; else if(!isNaN(b)) runs += parseInt(b); });
-    let pred = runs > 10 ? "AGGRESSIVE: Momentum with Bat." : (wkts > 0 ? "CAUTION: Wicket Pattern Detected." : "STABLE: Standard Play.");
+    let pred = runs > 12 ? "AGGRESSIVE: Momentum with Bat." : (wkts > 0 ? "CAUTION: Wicket Pattern Detected." : "STABLE: Standard Play.");
 
     res.status(200).json({
       success: true,
+      timestamp: new Date().toISOString(),
       match_info: {
         title: "IPCT TARGET LOCKED",
-        score: $('title').text().split('|')[0].trim(),
+        live_score: $('title').text().split('|')[0].trim(),
         status: $('.cb-text-live, .cb-min-stts').first().text().trim() || timingStr,
         bowler: $('.cb-min-bwl-rw').first().find('a').first().text().trim() || "N/A",
         last_balls: ballHistory,
         prediction: pred
-      }
+      },
+      target: activeMatchUrl
     });
 
   } catch (error) { res.status(500).json({ success: false, error: error.message }); }
