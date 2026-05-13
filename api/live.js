@@ -2,7 +2,7 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 
 module.exports = async function (req, res) {
-  // CORS & ANTI-CACHE ARMOR (Forces phone to fetch fresh data every time)
+  // CORS & ANTI-CACHE ARMOR
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -92,9 +92,7 @@ module.exports = async function (req, res) {
                     }
                 }
             });
-        } catch (err) {
-            // Silently move to the next archive node
-        }
+        } catch (err) {}
     }
 
     if (!activeMatchUrl) {
@@ -113,56 +111,69 @@ module.exports = async function (req, res) {
     }
 
     // --- PHASE 2: DEEP MATCH SCRAPE ---
+    // Do not force /live-cricket-scores/ replacement. Let Cricbuzz route to the correct archive tab naturally.
     let commUrl = activeMatchUrl;
-    if (commUrl.includes('/cricket-scores/')) commUrl = commUrl.replace('/cricket-scores/', '/live-cricket-scores/');
-    if (commUrl.includes('/cricket-scorecard/')) commUrl = commUrl.replace('/cricket-scorecard/', '/live-cricket-scores/');
 
     const { data: matchHtml } = await axios.get(commUrl, { headers });
     const $m = cheerio.load(matchHtml);
 
-    // Added .cb-status-msg to catch deeply archived match results
+    // 1. Fetch exact status text
     let statusText = $m('.cb-text-complete, .cb-status-msg, .cb-text-live, .cb-min-stts, .cb-text-preview, .cb-nav-subhdr').first().text().trim();
     if (!statusText) statusText = $m('.text-gray').first().text().trim() || "Status Unknown";
 
-    let pageTitle = $m('title').text();
-    let scoreStr = pageTitle.split('-')[0].trim();
-    if (scoreStr.toLowerCase().includes(' vs ') || scoreStr.toLowerCase().includes('opt to')) {
+    // 2. Check if the match is completely over
+    let isComplete = $m('.cb-text-complete').length > 0 || 
+                     $m('.cb-status-msg').length > 0 || 
+                     statusText.toLowerCase().includes('won by') || 
+                     statusText.toLowerCase().includes('result') || 
+                     statusText.toLowerCase().includes('beat') ||
+                     statusText.toLowerCase().includes('tied');
+
+    // 3. Extract the Live Score directly
+    let scoreStr = "";
+    let batScore = $m('.cb-min-bat-rw').first().text().trim(); 
+    if (!batScore) batScore = $m('.ui-bat-team-scores').first().text().trim(); // Failsafe for alternative mobile view
+
+    if (batScore) {
+        scoreStr = batScore.replace(/\s+/g, ' '); // Clean up extra spaces
+    } else if (isComplete) {
+        scoreStr = "Match Ended";
+    } else {
         scoreStr = "Pre-Match Intel";
     }
 
+    // 4. Extract Bowler or Active Status
+    let bowlerStr = "N/A";
+    if (isComplete) {
+        bowlerStr = "Match Concluded";
+    } else if (batScore) {
+        const bRow = $m('.cb-min-bwl-rw').first();
+        if (bRow.length > 0) {
+            const name = bRow.find('a').first().text().trim();
+            const stats = bRow.text().replace(name, '').replace(/\s+/g, ' ').trim();
+            bowlerStr = name ? `${name} (${stats})` : "Active Play";
+        } else {
+            bowlerStr = "Innings Break / Active";
+        }
+    } else {
+        bowlerStr = "Toss Pending / Countdown Active";
+    }
+
+    // 5. Extract Recent Balls
     let ballHistory = [];
-    $m('.cb-col-10.cb-font-12, .cb-col.cb-col-8.cb-mtch-blt').each((i, el) => {
+    $m('.cb-col-10.cb-font-12, .cb-col.cb-col-8.cb-mtch-blt, .cb-ovr-bl').each((i, el) => {
       if (i < 12) ballHistory.push($m(el).text().trim());
     });
 
-    let bowlerStr = "N/A";
-    const bRow = $m('.cb-min-bwl-rw').first();
-    if (bRow.length > 0) {
-        const name = bRow.find('a').first().text().trim();
-        const stats = bRow.text().replace(name, '').replace(/\s+/g, ' ').trim();
-        if (name) bowlerStr = `${name} (${stats})`;
-    } else {
-        const bStats = $m('.cb-col-50').filter((i, e) => $m(e).text().toLowerCase().includes('ov')).first();
-        if (bStats.length > 0) {
-            const bName = bStats.prev().text().trim();
-            if (bName) bowlerStr = bName + " (Active)";
-        }
+    if (isComplete && ballHistory.length === 0) {
+        ballHistory = ["E", "N", "D"];
     }
 
     // --- PHASE 3: ORACLE LOGIC & OUTPUT ---
-    // Added 'beat' and targeted .cb-status-msg to ensure completed matches are recognized
-    let isComplete = $m('.cb-text-complete').length > 0 || $m('.cb-status-msg').length > 0 || statusText.toLowerCase().includes('won by') || statusText.toLowerCase().includes('result') || statusText.toLowerCase().includes('beat');
-    let isUpcoming = scoreStr === "Pre-Match Intel";
     let predStr = "Waiting for Toss";
-
     if (isComplete) {
-        bowlerStr = "Match Concluded";
         predStr = "Mission Accomplished";
-        scoreStr = "Match Ended";
-        if (ballHistory.length === 0) ballHistory = ["E", "N", "D"];
-    } else if (isUpcoming) {
-        bowlerStr = "Toss Pending / Countdown Active";
-    } else if (ballHistory.length > 0) {
+    } else if (batScore && ballHistory.length > 0) {
         let runs = 0, wkts = 0;
         ballHistory.slice(0, 6).forEach(b => {
           if (b === 'W') wkts++;
