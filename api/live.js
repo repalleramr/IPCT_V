@@ -3,36 +3,21 @@ const cheerio = require('cheerio');
 
 module.exports = async function (req, res) {
 
-  // =========================
-  // HEADERS
-  // =========================
-
   res.setHeader('Access-Control-Allow-Origin', '*');
 
   res.setHeader(
     'Cache-Control',
-    'no-store, max-age=0'
+    'no-store'
   );
 
   try {
 
-    // =========================
-    // GET TEAMS
-    // =========================
+    // =====================
+    // GET TEAM QUERY
+    // =====================
 
-    let teams = req.query.teams || "";
-
-    if (
-      !teams &&
-      req.url &&
-      req.url.includes('teams=')
-    ) {
-
-      teams = decodeURIComponent(
-        req.url.split('teams=')[1]
-          .split('&')[0]
-      );
-    }
+    let teams =
+      req.query.teams || "";
 
     if (!teams) {
 
@@ -40,57 +25,24 @@ module.exports = async function (req, res) {
 
         success: false,
 
-        error: "No target teams"
+        error: "No teams provided"
       });
     }
 
-    teams = teams.toLowerCase();
+    teams =
+      teams.toLowerCase();
 
-    // =========================
-    // TEAM ALIASES
-    // =========================
+    // =====================
+    // IPL PAGE ONLY
+    // =====================
 
-    const aliases = {
+    const IPL_URL =
+      'https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches';
 
-      "mumbai indians":
-        ["mi", "mumbai"],
-
-      "chennai super kings":
-        ["csk", "chennai"],
-
-      "royal challengers bengaluru":
-        ["rcb", "bengaluru", "bangalore"],
-
-      "kolkata knight riders":
-        ["kkr", "kolkata"],
-
-      "delhi capitals":
-        ["dc", "delhi"],
-
-      "gujarat titans":
-        ["gt", "gujarat"],
-
-      "lucknow super giants":
-        ["lsg", "lucknow"],
-
-      "punjab kings":
-        ["pbks", "punjab"],
-
-      "rajasthan royals":
-        ["rr", "rajasthan"],
-
-      "sunrisers hyderabad":
-        ["srh", "hyderabad", "sunrisers"]
-    };
-
-    // =========================
-    // FETCH MATCH LIST
-    // =========================
-
-    const recent =
+    const page =
       await axios.get(
 
-        'https://www.cricbuzz.com/cricket-match/live-scores',
+        IPL_URL,
 
         {
 
@@ -104,15 +56,14 @@ module.exports = async function (req, res) {
         }
       );
 
-    const $ = cheerio.load(
-      recent.data
-    );
+    const $ =
+      cheerio.load(page.data);
 
     let matchUrl = null;
 
-    // =========================
-    // FIND MATCH
-    // =========================
+    // =====================
+    // FIND MATCH LINK
+    // =====================
 
     $('a').each((i, el) => {
 
@@ -128,33 +79,25 @@ module.exports = async function (req, res) {
         href.includes('/live-cricket-scores/')
       ) {
 
-        const t = teams.split(' vs ');
+        const t =
+          teams.split(' vs ');
 
         if (t.length >= 2) {
 
           const t1 =
-            t[0].trim().toLowerCase();
+            t[0]
+              .trim()
+              .split(' ')[0];
 
           const t2 =
-            t[1].trim().toLowerCase();
+            t[1]
+              .trim()
+              .split(' ')[0];
 
-          const t1Aliases =
-            aliases[t1] || [t1];
-
-          const t2Aliases =
-            aliases[t2] || [t2];
-
-          const hasT1 =
-            t1Aliases.some(a =>
-              text.includes(a)
-            );
-
-          const hasT2 =
-            t2Aliases.some(a =>
-              text.includes(a)
-            );
-
-          if (hasT1 && hasT2) {
+          if (
+            text.includes(t1) &&
+            text.includes(t2)
+          ) {
 
             matchUrl =
               'https://www.cricbuzz.com' +
@@ -166,9 +109,9 @@ module.exports = async function (req, res) {
       }
     });
 
-    // =========================
+    // =====================
     // MATCH NOT FOUND
-    // =========================
+    // =====================
 
     if (!matchUrl) {
 
@@ -176,13 +119,13 @@ module.exports = async function (req, res) {
 
         success: false,
 
-        error: "Match not found"
+        error: "IPL match not found"
       });
     }
 
-    // =========================
+    // =====================
     // FETCH MATCH PAGE
-    // =========================
+    // =====================
 
     const match =
       await axios.get(
@@ -201,68 +144,52 @@ module.exports = async function (req, res) {
         }
       );
 
-    const $m =
-      cheerio.load(match.data);
+    const html =
+      match.data;
 
-    // =========================
-    // SCORE
-    // =========================
+    // =====================
+    // SCORE REGEX
+    // =====================
 
-    let score = '';
+    const scores =
+      html.match(
+        /\b\d{2,3}\/\d{1,2}\b/g
+      );
 
-    const scoreSelectors = [
+    let score =
+      "Score unavailable";
 
-      '.cb-font-20',
+    if (
+      scores &&
+      scores.length
+    ) {
 
-      '.cb-min-bat-rw',
+      // choose highest score
+      score =
+        scores.sort((a, b) => {
 
-      '.cb-scrs-wrp',
+          return (
+            parseInt(
+              b.split('/')[0]
+            ) -
 
-      '.cb-col-100.cb-col'
-    ];
+            parseInt(
+              a.split('/')[0]
+            )
+          );
 
-    for (const sel of scoreSelectors) {
-
-      const txt =
-        $m(sel)
-          .first()
-          .text()
-          .trim();
-
-      if (
-        txt &&
-        txt.length > 3
-      ) {
-
-        score = txt;
-
-        break;
-      }
+        })[0];
     }
 
-    // REGEX FALLBACK
-
-    if (!score) {
-
-      const body =
-        $m('body').text();
-
-      const found =
-        body.match(
-          /\d{1,3}\/\d{1,2}/
-        );
-
-      if (found) {
-
-        score = found[0];
-      }
-    }
-
-    // =========================
+    // =====================
     // STATUS
-    // =========================
+    // =====================
 
-    let status = '';
+    const $m =
+      cheerio.load(html);
+
+    let status =
+      'Live';
 
     const statusSelectors = [
 
@@ -270,9 +197,7 @@ module.exports = async function (req, res) {
 
       '.cb-status-msg',
 
-      '.cb-text-complete',
-
-      '.cb-mini-status'
+      '.cb-text-complete'
     ];
 
     for (const sel of statusSelectors) {
@@ -291,20 +216,14 @@ module.exports = async function (req, res) {
       }
     }
 
-    if (!status) {
-
-      status = 'Live';
-    }
-
-    // =========================
-    // SIMPLE AI
-    // =========================
+    // =====================
+    // SIMPLE PREDICTION
+    // =====================
 
     let prediction =
       'Balanced';
 
     if (
-      score &&
       score.includes('/')
     ) {
 
@@ -330,9 +249,9 @@ module.exports = async function (req, res) {
       }
     }
 
-    // =========================
-    // FINAL RESPONSE
-    // =========================
+    // =====================
+    // RESPONSE
+    // =====================
 
     return res.status(200).json({
 
@@ -341,11 +260,10 @@ module.exports = async function (req, res) {
       match_info: {
 
         title:
-          'IPCT TARGET LOCKED',
+          'IPL LIVE INTEL',
 
         live_score:
-          score ||
-          'Score unavailable',
+          score,
 
         status:
           status,
