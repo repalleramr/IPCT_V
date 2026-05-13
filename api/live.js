@@ -8,154 +8,161 @@ module.exports = async function (req, res) {
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  let query = req.query.teams || "";
-  if (!query && req.url.includes('teams=')) {
-      query = decodeURIComponent(req.url.split('teams=')[1].split('&')[0]);
-  }
-  let targetTeams = query.toLowerCase().replace(/\+/g, ' ').trim();
+  let targetTeams = (req.query.teams || "").toLowerCase().trim();
+  let rawDateStr = req.query.time || ""; // Used for Countdown
 
-  if (!targetTeams || targetTeams === "vs") {
-      return res.status(200).json({ success: false, error: "Satellite waiting for target teams..." });
-  }
+  if (!targetTeams) return res.status(200).json({ success: false, error: "Awaiting Target Intel..." });
 
   const teamAliases = {
-    "chennai": ["csk", "chennai"], "csk": ["csk", "chennai"],
-    "delhi": ["dc", "delhi"], "dc": ["dc", "delhi"],
-    "gujarat": ["gt", "gujarat"], "gt": ["gt", "gujarat"],
-    "kolkata": ["kkr", "kolkata"], "kkr": ["kkr", "kolkata"],
-    "lucknow": ["lsg", "lucknow"], "lsg": ["lsg", "lucknow"],
-    "mumbai": ["mi", "mumbai"], "mi": ["mi", "mumbai"],
-    "punjab": ["pbks", "punjab", "kings"], "pbks": ["pbks", "punjab", "kings"],
-    "rajasthan": ["rr", "rajasthan"], "rr": ["rr", "rajasthan"],
-    "royal": ["rcb", "royal", "bengaluru", "bangalore"], "rcb": ["rcb", "royal", "bengaluru", "bangalore"],
-    "sunrisers": ["srh", "sunrisers", "hyderabad"], "srh": ["srh", "sunrisers", "hyderabad"]
+    "chennai": ["csk", "chennai"], "delhi": ["dc", "delhi"],
+    "gujarat": ["gt", "gujarat"], "kolkata": ["kkr", "kolkata"],
+    "lucknow": ["lsg", "lucknow"], "mumbai": ["mi", "mumbai"],
+    "punjab": ["pbks", "punjab"], "rajasthan": ["rr", "rajasthan"],
+    "royal": ["rcb", "bengaluru", "bangalore"], "sunrisers": ["srh", "hyderabad"]
   };
 
-  try {
-    const headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' };
-    let t1 = targetTeams.split(' vs ')[0]?.trim().split(' ')[0] || "";
-    let t2 = targetTeams.split(' vs ')[1]?.trim().split(' ')[0] || "";
-    const t1A = teamAliases[t1] || [t1];
-    const t2A = teamAliases[t2] || [t2];
+  let t1 = targetTeams.split(' vs ')[0]?.trim().split(' ')[0] || "";
+  let t2 = targetTeams.split(' vs ')[1]?.trim().split(' ')[0] || "";
+  const t1A = teamAliases[t1] || [t1];
+  const t2A = teamAliases[t2] || [t2];
 
-    const scanPages = [
-        'https://www.cricbuzz.com/cricket-match/live-scores',
-        'https://www.cricbuzz.com/cricket-match/live-scores/recent-matches'
-    ];
-
-    let matchUrl = null;
-    for (const page of scanPages) {
-        const { data: pageData } = await axios.get(page, { headers });
-        const $p = cheerio.load(pageData);
-        $p('a').each((i, el) => {
-            const href = $p(el).attr('href') || "";
-            const text = ($p(el).text() + " " + href).toLowerCase();
-            if ((href.includes('/live-cricket-scores/') || href.includes('/cricket-scores/')) && !href.includes('news')) {
-                if (t1A.some(a => text.includes(a)) && t2A.some(a => text.includes(a))) {
-                    matchUrl = href.startsWith('http') ? href : 'https://www.cricbuzz.com' + href;
-                    return false;
-                }
-            }
-        });
-        if (matchUrl) break;
-    }
-
-    if (!matchUrl) throw new Error(`Target ${t1} vs ${t2} not found in matrix.`);
-
-    const { data: mHtml } = await axios.get(matchUrl, { headers });
-    const $m = cheerio.load(mHtml);
-
-    // DEEP INTEL EXTRACTION (Mapping to your CREX-style JSON)
-    let payload = {
+  let payload = {
         title: "IPL LIVE INTEL",
-        status: null,
-        match_state: "live",
+        status: "Intel Gathering...",
+        match_state: "standby",
         live_score: null,
         overs: null,
         target: null,
         required_rr: null,
         current_rr: null,
         striker: null,
-        non_striker: null,
         bowler: null,
         toss: null,
         result: null,
-        venue: null,
-        last_ball: null,
-        last_over: [],
+        last_over: ["-", "-", "-", "-", "-", "-"],
         prediction: "Tracking...",
-        source: "mi6-core-scraper",
-        source_url: matchUrl
-    };
+        countdown: null
+  };
 
-    // 1. Status & Result
-    payload.status = $m('.cb-text-complete, .cb-text-live, .cb-status-msg').first().text().trim();
-    if (payload.status.toLowerCase().includes('won') || payload.status.toLowerCase().includes('result')) {
-        payload.match_state = "complete";
-        payload.result = payload.status;
-        payload.title = "MISSION ACCOMPLISHED";
-    } else if (payload.status.toLowerCase().includes('delay') || payload.status.toLowerCase().includes('rain') || payload.status.toLowerCase().includes('stumps')) {
-        payload.match_state = "delay";
-    } else if (payload.status.toLowerCase().includes('toss')) {
-        payload.match_state = "pre-match";
-        payload.toss = payload.status;
-    }
+  try {
+    // ==========================================
+    // NODE 1: ESPNCricinfo XML (Bulletproof Score & Status)
+    // ==========================================
+    try {
+        const { data: xmlData } = await axios.get('https://www.espncricinfo.com/rss/livescores.xml', { timeout: 3000 });
+        const $xml = cheerio.load(xmlData, { xmlMode: true });
+        
+        $xml('item').each((i, el) => {
+            const title = $xml(el).find('title').text();
+            const lowerTitle = title.toLowerCase();
+            
+            if (t1A.some(a => lowerTitle.includes(a)) && t2A.some(a => lowerTitle.includes(a))) {
+                // Parse score from title e.g., "Punjab Kings 150/4 vs Delhi Capitals..."
+                let scoreMatch = title.split(' vs ')[0].trim();
+                if (scoreMatch.match(/\d+\/\d+/)) payload.live_score = scoreMatch;
+                
+                payload.status = $xml(el).find('description').text().trim();
+                return false; 
+            }
+        });
+    } catch(e) { console.log("Node 1 Failed, moving to Node 2"); }
 
-    // 2. Scores & Overs
-    let rawScore = $m('.cb-min-bat-rw').first().text().trim() || $m('.ui-bat-team-scores').first().text().trim();
-    if (rawScore) {
-        // Example: "RCB 180/4 (17.2)"
-        let scoreMatch = rawScore.match(/(.*?)\s*(\d+\/\d+|\d+)\s*\((.*?)\)/);
-        if (scoreMatch) {
-            payload.live_score = scoreMatch[1].trim() + " " + scoreMatch[2].trim();
-            payload.overs = scoreMatch[3].replace('ov', '').trim();
-        } else {
-            payload.live_score = rawScore;
+    // ==========================================
+    // NODE 2: Cricbuzz HTML (Rich Data: Balls, Players, Rates)
+    // ==========================================
+    const headers = { 'User-Agent': 'Mozilla/5.0' };
+    let matchUrl = null;
+    try {
+        const { data: pageData } = await axios.get('https://www.cricbuzz.com/cricket-match/live-scores', { headers });
+        const $p = cheerio.load(pageData);
+        $p('a').each((i, el) => {
+            const href = $p(el).attr('href') || "";
+            const text = ($p(el).text() + " " + href).toLowerCase();
+            if (href.includes('/live-cricket-scores/') && t1A.some(a => text.includes(a)) && t2A.some(a => text.includes(a))) {
+                matchUrl = 'https://www.cricbuzz.com' + href; return false;
+            }
+        });
+
+        if (matchUrl) {
+            const { data: mHtml } = await axios.get(matchUrl, { headers });
+            const $m = cheerio.load(mHtml);
+
+            // Enhance Status if Node 1 missed it
+            let cbStatus = $m('.cb-text-complete, .cb-text-live, .cb-status-msg').first().text().trim();
+            if (cbStatus) payload.status = cbStatus;
+
+            // Rich Data Extraction
+            let crrMatch = $m('.cb-font-12.cb-text-gray').text().match(/CRR:\s*([\d\.]+)/);
+            let rrrMatch = $m('.cb-font-12.cb-text-gray').text().match(/REQ:\s*([\d\.]+)/);
+            if (crrMatch) payload.current_rr = crrMatch[1];
+            if (rrrMatch) payload.required_rr = rrrMatch[1];
+
+            let tgtMatch = $m('.cb-min-stts').text().match(/Target:\s*(\d+)/i);
+            if (tgtMatch) payload.target = tgtMatch[1];
+
+            payload.striker = $m('.cb-min-inf.cb-min-bat-rw .cb-text-link').first().text().trim() || null;
+            payload.bowler = $m('.cb-min-bwl-rw .cb-text-link').first().text().trim() || null;
+
+            let balls = [];
+            $m('.cb-col-10.cb-font-12, .cb-ovr-bl').each((i, el) => {
+                let b = $m(el).text().trim(); if (b.length <= 3) balls.push(b);
+            });
+            if (balls.length > 0) payload.last_over = balls.slice(0, 6);
         }
+    } catch(e) { console.log("Node 2 Failed, relying on Node 1"); }
+
+    // ==========================================
+    // DATA MERGER & MATCH STATE LOGIC
+    // ==========================================
+    let lowerStatus = (payload.status || "").toLowerCase();
+
+    // 1. Determine Match State
+    if (lowerStatus.includes('abandoned')) {
+        payload.match_state = "abandoned"; payload.title = "MISSION ABORTED";
+    } else if (lowerStatus.includes('delay') || lowerStatus.includes('rain')) {
+        payload.match_state = "delayed"; payload.title = "WEATHER / DELAY PROTOCOL";
+    } else if (lowerStatus.includes('won') || lowerStatus.includes('result') || lowerStatus.includes('tied')) {
+        payload.match_state = "completed"; payload.title = "MISSION ACCOMPLISHED";
+        payload.result = payload.status; payload.last_over = ["E", "N", "D"];
+        payload.bowler = "Mission Concluded"; payload.striker = null;
+    } else if (lowerStatus.includes('toss')) {
+        payload.match_state = "toss"; payload.toss = payload.status;
+        payload.live_score = "Pre-Match Intel"; payload.bowler = "Toss Complete";
+    } else if (payload.live_score && payload.live_score.match(/\d+/)) {
+        payload.match_state = "running";
     }
 
-    // 3. Run Rates & Target
-    let rrText = $m('.cb-font-12.cb-text-gray').text() || "";
-    let crrMatch = rrText.match(/CRR:\s*([\d\.]+)/);
-    let rrrMatch = rrText.match(/REQ:\s*([\d\.]+)/);
-    if (crrMatch) payload.current_rr = crrMatch[1];
-    if (rrrMatch) payload.required_rr = rrrMatch[1];
-    
-    let targetText = $m('.cb-min-stts').text() || "";
-    let tgtMatch = targetText.match(/Target:\s*(\d+)/i);
-    if (tgtMatch) payload.target = tgtMatch[1];
+    // 2. Countdown Timer Logic (If not running/completed/abandoned)
+    if (rawDateStr && (payload.match_state === "standby" || payload.match_state === "delayed")) {
+        try {
+            // Parse "May 14 (7:30 PM)" into a usable date
+            let monthStr = rawDateStr.split(' ')[0]; // "May"
+            let dayStr = rawDateStr.split(' ')[1]; // "14"
+            let timeStr = rawDateStr.match(/\((.*?)\)/)[1]; // "7:30 PM"
+            let isPM = timeStr.includes("PM");
+            let hours = parseInt(timeStr.split(':')[0]) + (isPM ? 12 : 0);
+            let mins = parseInt(timeStr.split(':')[1].replace(/[a-zA-Z\s]/g, ''));
+            
+            // Assuming current year 2026
+            let targetDate = new Date(`2026-${monthStr}-${dayStr} ${hours}:${mins}:00`);
+            let now = new Date(); // Vercel is UTC, but JS Date math handles the diff if we offset it
+            targetDate.setHours(targetDate.getHours() - 5); targetDate.setMinutes(targetDate.getMinutes() - 30); // Convert target to UTC for math
 
-    // 4. Players
-    let batRows = $m('.cb-min-inf.cb-min-bat-rw').find('.cb-text-link');
-    if (batRows.length > 0) payload.striker = $m(batRows[0]).text().trim();
-    if (batRows.length > 1) payload.non_striker = $m(batRows[1]).text().trim();
-    payload.bowler = $m('.cb-min-bwl-rw').find('.cb-text-link').first().text().trim() || null;
-
-    // 5. Radar (Last Over)
-    $m('.cb-col-10.cb-font-12, .cb-ovr-bl, .cb-col-8.cb-mtch-blt').each((i, el) => {
-        let b = $m(el).text().trim();
-        if (b && b.length <= 3) payload.last_over.push(b);
-    });
-    if (payload.last_over.length > 0) {
-        payload.last_over = payload.last_over.slice(0, 6);
-        payload.last_ball = payload.last_over[payload.last_over.length - 1];
-    } else if (payload.match_state === "complete") {
-        payload.last_over = ["E", "N", "D"];
-    } else {
-        payload.last_over = ["-", "-", "-", "-", "-", "-"];
+            let diffMs = targetDate - now;
+            if (diffMs > 0 && diffMs < 86400000) { // Less than 24 hours away
+                let hrs = Math.floor((diffMs % 86400000) / 3600000);
+                let m = Math.round(((diffMs % 86400000) % 3600000) / 60000);
+                payload.countdown = `T-MINUS ${hrs}h ${m}m TO OPERATION`;
+                payload.match_state = "countdown";
+                payload.live_score = "Awaiting Deployment";
+            }
+        } catch(e) {}
     }
 
-    // 6. Venue
-    payload.venue = $m('.cb-nav-subhdr').text().replace('Match Info', '').trim() || null;
+    // Final Fallbacks
+    if (!payload.live_score) payload.live_score = "Intel Offline";
 
-    // Clean up Nulls
-    if (!payload.live_score && payload.match_state === "complete") payload.live_score = "Match Ended";
-    if (!payload.live_score) payload.live_score = "Pre-Match Intel";
-
-    return res.status(200).json({
-      success: true,
-      match_info: payload
-    });
+    return res.status(200).json({ success: true, match_info: payload });
 
   } catch (err) {
     return res.status(200).json({ success: false, error: err.message });
