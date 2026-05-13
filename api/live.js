@@ -11,8 +11,8 @@ module.exports = async function (req, res) {
 
   const SERIES_URL = 'https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches';
 
-  // Read the Target Teams sent from your Android App
-  let targetTeams = null;
+  // Extract selected teams from the App's request
+  let targetTeams = "";
   if (req.url.includes('teams=')) {
       targetTeams = decodeURIComponent(req.url.split('teams=')[1].split('&')[0]).toLowerCase();
   }
@@ -26,57 +26,66 @@ module.exports = async function (req, res) {
     const $series = cheerio.load(seriesHtml);
     let activeMatchUrl = null;
 
-    // DIRECTIVE 1: Search specifically for the teams selected in the app dropdown
+    // --- PHASE 1: TARGETED SEARCH ---
     if (targetTeams) {
         const teamParts = targetTeams.split(' vs ').map(t => t.trim());
         const t1 = teamParts[0];
-        const t2 = teamParts[1] || ""; 
+        const t2 = teamParts[1] || "";
 
-        $series('a[href*="/live-cricket-scores/"]').each((i, el) => {
+        // We check ALL anchor tags on the series page for team name matches
+        $series('a').each((i, el) => {
+            const href = $series(el).attr('href') || "";
             const linkText = $series(el).text().toLowerCase();
-            if (t1 && linkText.includes(t1) && (!t2 || linkText.includes(t2))) {
-                activeMatchUrl = $series(el).attr('href');
-                return false; // Target Acquired
-            }
-        });
-    }
-
-    // DIRECTIVE 2: Ultimate Brute Force Failsafe 
-    // If the selected match isn't found, find the first match that IS NOT finished yet.
-    if (!activeMatchUrl) {
-        $series('a[href*="/live-cricket-scores/"]').each((i, el) => {
-            // We check the entire block of text surrounding the link
-            const matchBlockText = $series(el).closest('.cb-col-100, .cb-series-matches').text().toLowerCase();
-            const isCompleted = matchBlockText.includes('won by') || matchBlockText.includes('result') || matchBlockText.includes('abandoned');
             
-            if (!isCompleted && !activeMatchUrl) {
-                activeMatchUrl = $series(el).attr('href');
+            // Only consider links that look like cricket score pages
+            if (href.includes('cricket-scores')) {
+                if (t1 && linkText.includes(t1) && (!t2 || linkText.includes(t2))) {
+                    activeMatchUrl = href;
+                    return false; // Found our mission target
+                }
             }
         });
     }
 
-    // DIRECTIVE 3: Absolute Failsafe (Grab literally the first link if all else fails)
+    // --- PHASE 2: AUTOMATIC FALLBACK ---
+    // If targeted search fails, find the first match that isn't 'Completed'
     if (!activeMatchUrl) {
-        activeMatchUrl = $series('a[href*="/live-cricket-scores/"]').first().attr('href');
+        $series('.cb-series-matches').each((i, el) => {
+            const blockText = $series(el).text().toLowerCase();
+            const isDone = blockText.includes('won by') || blockText.includes('result');
+            
+            if (!isDone) {
+                const link = $series(el).find('a[href*="cricket-scores"]').attr('href');
+                if (link) {
+                    activeMatchUrl = link;
+                    return false;
+                }
+            }
+        });
     }
 
     if (!activeMatchUrl || activeMatchUrl === "undefined") {
         return res.status(200).json({
           success: true,
-          match_info: { title: "Target Missing", live_score: "Cricbuzz server is not responding with matches.", status: "Offline", bowler: "N/A" }
+          match_info: { title: "MISSION FAILED", live_score: "Target Out of Range", status: "Offline", bowler: "N/A" }
         });
     }
 
     if (!activeMatchUrl.startsWith('http')) activeMatchUrl = 'https://www.cricbuzz.com' + activeMatchUrl;
 
-    // FETCH THE TARGETED MATCH
+    // --- PHASE 3: DATA EXTRACTION ---
     const { data: matchHtml } = await axios.get(activeMatchUrl, { headers });
     const $ = cheerio.load(matchHtml);
 
+    // Title Score Extractor
     const pageTitle = $('title').text();
-    let scoreFromTitle = pageTitle.includes('-') ? pageTitle.split('-')[0].trim() : "Pre-Match Intel";
+    let scoreFromTitle = pageTitle.includes('-') ? pageTitle.split('-')[0].trim() : "Pre-Match Intelligence";
 
-    let bInfo = "Waiting for Bowler...";
+    // Status Extractor
+    const liveStatus = $('.cb-text-live, .cb-text-preview, .cb-min-stts').first().text().trim() || "Standby";
+
+    // Bowler Extractor
+    let bInfo = "Standby (Toss Pending)";
     const bRow = $('.cb-min-bwl-rw').first();
     if (bRow.length > 0) {
         const name = bRow.find('a').first().text().trim();
@@ -85,10 +94,8 @@ module.exports = async function (req, res) {
     } else {
         const bStats = $('.cb-col-50').filter((i, e) => $(e).text().toLowerCase().includes('ov')).first();
         const bName = bStats.prev().text().trim();
-        if (bName && bName.length < 25) bInfo = bName + " (On Deck)";
+        if (bName && bName.length < 25) bInfo = bName + " (Active)";
     }
-
-    const liveStatus = $('.cb-text-live, .cb-text-preview, .cb-text-complete, .cb-min-stts').first().text().trim() || "Status Unknown";
 
     res.status(200).json({
       success: true,
