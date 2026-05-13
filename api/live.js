@@ -2,7 +2,6 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 
 module.exports = async function (req, res) {
-  // CORS Setup
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -12,16 +11,15 @@ module.exports = async function (req, res) {
   const SERIES_URL = 'https://www.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches';
   const HOME_URL = 'https://www.cricbuzz.com/';
 
-  // BULLETPROOF TEAM EXTRACTION: Natively syncs with Vercel's query parser
+  // BULLETPROOF QUERY EXTRACTOR 
   let targetTeams = "";
-  if (req.query && req.query.teams) {
-      targetTeams = String(req.query.teams).toLowerCase();
-  } else if (req.url && req.url.includes('teams=')) {
-      targetTeams = decodeURIComponent(req.url.split('teams=')[1].split('&')[0]).toLowerCase();
-  }
-  targetTeams = targetTeams.replace(/\+/g, ' ').trim();
+  try {
+      const urlStr = req.url.startsWith('http') ? req.url : `http://localhost${req.url}`;
+      const urlObj = new URL(urlStr);
+      targetTeams = urlObj.searchParams.get('teams') || "";
+      targetTeams = targetTeams.toLowerCase().replace(/\+/g, ' ');
+  } catch(e) {}
 
-  // MI6 Alias Dictionary
   const teamAliases = {
       "chennai": ["csk", "chennai"],
       "delhi": ["dc", "delhi"],
@@ -40,18 +38,16 @@ module.exports = async function (req, res) {
     
     let activeMatchUrl = null;
     let matchState = "unknown"; 
-    let fallbackResult = "Awaiting match timing...";
+    let fallbackResult = "Upcoming Scheduled Match";
 
-    // Extract the first word of each team to use as the search key
     const t1Word = targetTeams.split(' vs ')[0] ? targetTeams.split(' vs ')[0].trim().split(' ')[0] : "";
     const t2Word = targetTeams.split(' vs ')[1] ? targetTeams.split(' vs ')[1].trim().split(' ')[0] : "";
 
     const t1Aliases = teamAliases[t1Word] || [t1Word];
     const t2Aliases = teamAliases[t2Word] || [t2Word];
-
     const hasAlias = (text, aliases) => aliases.some(alias => alias && text.includes(alias));
 
-    // --- PHASE 1: SERIES PAGE SCANNING ---
+    // --- PHASE 1: SERIES PAGE SCANNER ---
     try {
         const { data: seriesHtml } = await axios.get(SERIES_URL, { headers });
         const $series = cheerio.load(seriesHtml);
@@ -74,7 +70,7 @@ module.exports = async function (req, res) {
                     matchState = "upcoming";
                     let timeText = $series(el).find('.cb-text-preview').text().trim();
                     if (!timeText) timeText = $series(el).find('.text-gray').text().trim();
-                    fallbackResult = timeText || "Match Starting Soon";
+                    if (timeText) fallbackResult = timeText;
                 }
 
                 if (href) activeMatchUrl = href.startsWith('http') ? href : 'https://www.cricbuzz.com' + href;
@@ -83,7 +79,7 @@ module.exports = async function (req, res) {
         });
     } catch(e) {}
 
-    // --- PHASE 2: HOMEPAGE FALLBACK SCANNER ---
+    // --- PHASE 2: HOMEPAGE FALLBACK ---
     if (!activeMatchUrl && targetTeams) {
         try {
             const { data: homeHtml } = await axios.get(HOME_URL, { headers });
@@ -93,19 +89,14 @@ module.exports = async function (req, res) {
                 const href = $home(el).attr('href').toLowerCase();
                 const text = $home(el).text().toLowerCase();
                 
-                const matchesT1 = hasAlias(text, t1Aliases) || hasAlias(href, t1Aliases);
-                const matchesT2 = hasAlias(text, t2Aliases) || hasAlias(href, t2Aliases);
-
-                if (matchesT1 && matchesT2) {
+                if (hasAlias(text, t1Aliases) && hasAlias(text, t2Aliases)) {
                     activeMatchUrl = $home(el).attr('href');
                     activeMatchUrl = activeMatchUrl.startsWith('http') ? activeMatchUrl : 'https://www.cricbuzz.com' + activeMatchUrl;
                     
                     if (text.includes('won by') || text.includes('result')) {
-                        matchState = "complete";
-                        fallbackResult = "Match Ended";
+                        matchState = "complete"; fallbackResult = "Match Ended";
                     } else {
-                        matchState = "live"; 
-                        fallbackResult = "In Progress";
+                        matchState = "live"; fallbackResult = "In Progress";
                     }
                     return false;
                 }
@@ -113,19 +104,18 @@ module.exports = async function (req, res) {
         } catch(e) {}
     }
 
-    // --- PHASE 3: OUTPUT ROUTING ---
+    // --- PHASE 3: OUTPUT ---
     if (!activeMatchUrl || matchState === "upcoming" || matchState === "unknown") {
         return res.status(200).json({
           success: true,
           timestamp: new Date().toISOString(),
           match_info: {
             title: "STANDBY MODE",
-            live_score: "Awaiting First Ball",
-            status: fallbackResult !== "Awaiting match timing..." ? fallbackResult : "No Match Timing Found",
+            live_score: "Pre-Match / Future Schedule",
+            status: targetTeams ? fallbackResult : "Select Mission Target",
             bowler: "Toss Pending / N/A"
           },
-          target: SERIES_URL,
-          debug_scanned_aliases: `T1: ${t1Aliases.join('|')} --- T2: ${t2Aliases.join('|')}`
+          target: SERIES_URL
         });
     }
 
