@@ -31,7 +31,6 @@ module.exports = async function (req, res) {
   const t1A = teamAliases[t1] || [t1];
   const t2A = teamAliases[t2] || [t2];
 
-  // The Master Payload (Starts Empty)
   let payload = {
         title: "IPL LIVE INTEL",
         status: null,
@@ -56,11 +55,10 @@ module.exports = async function (req, res) {
   };
 
   const headers = { 
-      'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+      'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36',
       'Accept': 'application/json, text/plain, */*'
   };
 
-  // Helper Function: Merges new intel into the master payload ONLY if it's missing
   function mergeIntel(newData) {
       if (!payload.live_score && newData.live_score) payload.live_score = newData.live_score;
       if (!payload.status && newData.status) payload.status = newData.status;
@@ -73,11 +71,13 @@ module.exports = async function (req, res) {
       if (!payload.non_striker && newData.non_striker) payload.non_striker = newData.non_striker;
       if (!payload.bowler && newData.bowler) payload.bowler = newData.bowler;
       if (payload.last_over.length === 0 && newData.last_over && newData.last_over.length > 0) payload.last_over = newData.last_over;
+      if (newData.source) payload.source = newData.source;
+      if (newData.source_url) payload.source_url = newData.source_url;
   }
 
   try {
     // ==============================================================
-    // CASCADE 1: ESPN JSON API (Lightning Fast, Highly Structured)
+    // CASCADE 1: ESPN JSON API 
     // ==============================================================
     try {
         let espnData = {};
@@ -96,6 +96,7 @@ module.exports = async function (req, res) {
                         espnData.status = m.statusText || m.status;
                         if (m.tossResults && m.tossResults.text) espnData.toss = m.tossResults.text;
                         if (m.ground && m.ground.name) espnData.venue = m.ground.name;
+                        espnData.source = "espn-internal-api";
                         
                         let scores = [];
                         m.teams.forEach(t => {
@@ -107,16 +108,6 @@ module.exports = async function (req, res) {
                         });
                         if (scores.length > 0) espnData.live_score = scores.join(' v ');
                         
-                        // Check Details API if match is active/recent
-                        try {
-                            let detailsUrl = `https://hs-consumer-api.espncricinfo.com/v1/pages/match/details?lang=en&seriesId=${m.series.objectId}&matchId=${m.objectId}&latest=true`;
-                            let { data: dData } = await axios.get(detailsUrl, { headers, timeout: 2000 });
-                            if (dData.supportInfo && dData.supportInfo.liveInning) {
-                                let li = dData.supportInfo.liveInning;
-                                if (li.target) espnData.target = li.target.toString();
-                            }
-                        } catch(e) {}
-                        
                         matchFound = true;
                         break;
                     }
@@ -125,12 +116,11 @@ module.exports = async function (req, res) {
             if (matchFound) break;
         }
         mergeIntel(espnData);
-    } catch(e) { console.log("Cascade 1 Failed or Blocked."); }
+    } catch(e) {}
 
     // ==============================================================
-    // CASCADE 2: CRICBUZZ MOBILE (Fills in missing Venue, Toss, Score)
+    // CASCADE 2: CRICBUZZ MOBILE (STRICT ISOLATED EXTRACTION)
     // ==============================================================
-    // We only fire this if critical intel is still missing
     if (!payload.live_score || !payload.venue || !payload.toss || !payload.status) {
         try {
             let cbData = {};
@@ -161,39 +151,53 @@ module.exports = async function (req, res) {
                 let safeUrl = cbMatchUrl.replace('/live-cricket-scores/', '/live-cricket-scorecard/').replace('/cricket-scores/', '/live-cricket-scorecard/');
                 const { data: mHtml } = await axios.get(safeUrl, { headers, timeout: 4000 });
                 const $m = cheerio.load(mHtml);
+                
+                cbData.source = "cricbuzz-strict-scraper";
+                cbData.source_url = safeUrl;
 
-                let rawBodyText = $m('body').text().replace(/\s+/g, ' ');
+                // 1. ISOLATED STATUS EXTRACTION (Reads Title ONLY, NEVER the whole body)
+                let pageTitle = $m('title').text() || "";
+                let titleStatus = "";
+                pageTitle.split('|')[0].split('-').forEach(part => {
+                    if (part.toLowerCase().includes('won by') || part.toLowerCase().includes('tied')) {
+                        titleStatus = part.trim();
+                    }
+                });
+                cbData.status = titleStatus || $m('.cb-text-complete, .ui-match-status, .cb-status-msg').first().text().trim();
 
-                // Missing Status/Result?
-                if (!payload.status) {
-                    let winMatch = rawBodyText.match(/([a-zA-Z0-9\s]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
-                    if (winMatch) cbData.status = winMatch[1].trim();
-                    else cbData.status = $m('.cb-text-complete, .ui-match-status, .cb-status-msg').first().text().trim();
-                }
+                // 2. ISOLATED VENUE & TOSS EXTRACTION (Must start with exact word)
+                $m('div, span').each((i, el) => {
+                    let text = $m(el).text().trim().replace(/\s+/g, ' ');
+                    if (!cbData.venue && text.startsWith('Venue:')) {
+                        cbData.venue = text.split('Venue:')[1].split(/•|Date &|{/)[0].trim();
+                    }
+                    if (!cbData.toss && text.startsWith('Toss:')) {
+                        cbData.toss = text.split('Toss:')[1].trim();
+                    }
+                    if (!cbData.target && text.startsWith('Target:')) {
+                        cbData.target = text.split('Target:')[1].trim();
+                    }
+                });
 
-                // Missing Venue or Toss?
-                if (!payload.venue || !payload.toss) {
-                    $m('div, span').each((i, el) => {
-                        let text = $m(el).text().trim().replace(/\s+/g, ' ');
-                        if (!cbData.venue && text.startsWith('Venue:')) cbData.venue = text.split('Venue:')[1].split(/•|Date &|{/)[0].trim();
-                        if (!cbData.toss && text.startsWith('Toss:')) cbData.toss = text.split('Toss:')[1].trim();
-                    });
-                }
-
-                // Missing Score?
+                // 3. ISOLATED SCORE EXTRACTION
                 if (!payload.live_score) {
                     let teamScores = [];
                     $m('.ui-bat-team-scores, .cb-min-bat-rw').each((i, el) => teamScores.push($m(el).text().trim()));
-                    if (teamScores.length > 0) cbData.live_score = teamScores.join(' v ');
+                    if (teamScores.length > 0) {
+                        cbData.live_score = teamScores.join(' v ');
+                    } else {
+                        let ts = pageTitle.split(',')[0].split('|')[0].trim();
+                        if (ts.match(/\d+\/\d+/)) cbData.live_score = ts;
+                    }
                 }
 
                 mergeIntel(cbData);
             }
-        } catch(e) { console.log("Cascade 2 Failed or Blocked."); }
+        } catch(e) {}
     }
 
     // ==============================================================
-    // CASCADE 3: RSS XML FEEDS (The Ultimate Unblockable Failsafe)
+    // CASCADE 3: RSS XML FEEDS 
     // ==============================================================
     if (!payload.status || !payload.live_score) {
         try {
@@ -208,19 +212,18 @@ module.exports = async function (req, res) {
                         let scoreMatch = $x(el).find('title').text().split(' vs ')[0].trim();
                         if (scoreMatch.match(/\d+\/\d+/)) xmlData.live_score = scoreMatch;
                     }
+                    xmlData.source = "xml-failsafe";
                     return false; 
                 }
             });
             mergeIntel(xmlData);
-        } catch(e) { console.log("Cascade 3 Failed."); }
+        } catch(e) {}
     }
 
     // ==============================================================
-    // MATCH STATE ENGINE (Final Formatting)
+    // MATCH STATE ENGINE 
     // ==============================================================
     let lowerStatus = (payload.status || "").toLowerCase();
-
-    // Forced match completion check based on the status we scraped
     let isCompleted = lowerStatus.includes('won by') || lowerStatus.includes('result') || lowerStatus.includes('tied');
 
     if (lowerStatus.includes('abandoned')) {
@@ -264,7 +267,7 @@ module.exports = async function (req, res) {
         } catch(e) {}
     }
 
-    // Post-Cascade Fallbacks (If all 3 nodes failed to find a specific piece)
+    // Post-Cascade Fallbacks 
     if (!payload.live_score) payload.live_score = "Intel Unavailable";
     if (!payload.venue) payload.venue = "Location Secure";
     if (!payload.toss) payload.toss = "Awaiting Coin Drop";
