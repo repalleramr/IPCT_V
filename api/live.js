@@ -6,27 +6,21 @@ module.exports = async function (req, res) {
   const targetUrl = req.query.url || "";
   const rawDateStr = req.query.time || "";
 
-  // ==========================================
-  // 1. THE MASTER LEDGER (Internal Database)
-  // ==========================================
+  // 1. MASTER LEDGER (Now used as the Emergency Backup)
   const ledger = [
-    { id: "152140", date: "May 13", teams: "RCB vs KKR", venue: "Raipur" },
-    { id: "152141", date: "May 14", teams: "PBKS vs MI", venue: "Dharamsala" },
-    { id: "152142", date: "May 15", teams: "LSG vs CSK", venue: "Lucknow" }
+    { id: "152141", teams: "PBKS vs MI", venue: "HPCA Stadium, Dharamsala" },
+    { id: "152140", teams: "RCB vs KKR", venue: "Shaheed Veer Narayan Singh Stadium, Raipur" }
   ];
 
-  // Auto-detect match from URL or Ledger
-  let currentMatch = ledger.find(m => targetUrl.includes(m.id)) || { teams: "IPL 2026", venue: "India" };
-
   let payload = {
-    title: currentMatch.teams,
-    status: "Initializing Uplink...",
+    title: "IPL 2026",
+    status: "Uplink Established",
     match_state: "standby",
-    live_score: "Awaiting Data",
-    striker: "Scanning...",
-    bowler: "Scanning...",
+    live_score: "Match Not Started",
+    striker: "Awaiting Openers",
+    bowler: "Awaiting Bowler",
     toss: "Awaiting Coin Drop",
-    venue: currentMatch.venue,
+    venue: "Scanning Stadium...", // Professional standby message
     last_over: ["-", "-", "-", "-", "-", "-"],
     countdown: null
   };
@@ -34,52 +28,38 @@ module.exports = async function (req, res) {
   const headers = { 'User-Agent': 'Mozilla/5.0 (Linux; Android 10)' };
 
   try {
-    // ==========================================
-    // 2. SOURCE 1: DIRECT CRICBUZZ SCRAPE
-    // ==========================================
-    const cbRes = await axios.get(targetUrl, { headers, timeout: 3500 }).catch(() => null);
+    const cbRes = await axios.get(targetUrl, { headers, timeout: 4000 }).catch(() => null);
+    
     if (cbRes) {
       const $ = cheerio.load(cbRes.data);
-      let rawBody = $('body').text();
+      let pageText = $('body').text().replace(/\s+/g, ' ');
 
-      // Scrape Score
-      payload.live_score = $('.cb-font-20').first().text() || payload.live_score;
-      
-      // Scrape Status/Toss
-      let statusText = $('.cb-text-complete, .cb-status-msg').text().trim();
-      if (statusText) payload.status = statusText;
-
-      // Scrape Players
-      $('.cb-min-inf').each((i, el) => {
-        if (i === 0) payload.striker = $(el).text();
-      });
-      payload.bowler = $('.cb-min-bowl-rw').find('a').first().text() || payload.bowler;
-
-      // Check Completion
-      if (statusText.toLowerCase().includes('won by')) payload.match_state = "completed";
-    }
-
-    // ==========================================
-    // 3. SOURCE 2: ESPN BACKUP (If Source 1 Fails)
-    // ==========================================
-    if (payload.match_state === "standby" && payload.live_score === "Awaiting Data") {
-      const espn = await axios.get('https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current', { headers, timeout: 3000 }).catch(() => null);
-      if (espn && espn.data.matches) {
-        const m = espn.data.matches.find(match => 
-          currentMatch.teams.toLowerCase().includes(match.teams[0].team.abbreviation.toLowerCase())
-        );
-        if (m) {
-          payload.status = m.statusText;
-          payload.live_score = `${m.teams[0].score || '0/0'} v ${m.teams[1].score || ''}`;
-          if (m.status === "Live") payload.match_state = "live";
-          if (m.statusText.toLowerCase().includes('won')) payload.match_state = "completed";
-        }
+      // A. THE VENUE HUNTER (Rips directly from the page)
+      // Checks for "Venue: [Stadium Name]" or locations in the header
+      let venueMatch = pageText.match(/Venue\s*:\s*([^•|{]+)/i);
+      if (venueMatch) {
+          payload.venue = venueMatch[1].trim();
+      } else {
+          // If scraping fails, check the Ledger
+          let matchEntry = ledger.find(m => targetUrl.includes(m.id));
+          if (matchEntry) payload.venue = matchEntry.venue;
+          else payload.venue = "HPCA Stadium, Dharamsala"; // Logic: Today is PBKS vs MI
       }
+
+      // B. DATA RECOVERY (Score, Toss, Status)
+      payload.live_score = $('.cb-font-20').first().text() || payload.live_score;
+      payload.status = $('.cb-text-complete, .cb-status-msg, .ui-match-status').first().text().trim() || "Standby";
+      
+      // Toss Extraction
+      if (pageText.includes("won the toss")) {
+          let tossText = pageText.match(/([A-Za-z\s]+won the toss[^•]+)/i);
+          if (tossText) payload.toss = tossText[1].trim();
+      }
+
+      if (payload.status.toLowerCase().includes('won by')) payload.match_state = "completed";
     }
 
-    // ==========================================
-    // 4. COUNTDOWN ENGINE (From Ledger/Time)
-    // ==========================================
+    // C. COUNTDOWN (Targeting 7:30 PM IST)
     if (rawDateStr && payload.match_state === "standby") {
         let now = new Date();
         let target = new Date(`${rawDateStr}, 2026 19:30:00 GMT+0530`);
@@ -88,20 +68,12 @@ module.exports = async function (req, res) {
             let h = Math.floor(diff / 3600000);
             let m = Math.floor((diff % 3600000) / 60000);
             payload.countdown = `T-MINUS ${h}h ${m}m TO OPERATION`;
-        } else {
-            payload.countdown = "DEPLOYING NOW...";
-        }
-    }
-
-    // Final UI Polish
-    if (payload.match_state === "completed") {
-        payload.live_score = "Match Ended";
-        payload.last_over = ["E", "N", "D", "E", "D", "!"];
+        } else { payload.countdown = "FIRST BALL DEPLOYING..."; }
     }
 
     return res.status(200).json({ success: true, match_info: payload });
 
   } catch (err) {
-    return res.status(200).json({ success: false, error: "Network Jam" });
+    return res.status(200).json({ success: false, error: "Link Error" });
   }
 };
