@@ -113,7 +113,19 @@ module.exports = async function (req, res) {
              (payload.toss && payload.toss.length > 3);
   }
 
-  function matchesTeams(fullTxt) {
+  function matchesTeams(fullTxt) {if (
+    matchesTeams(fullTxt) &&
+    (
+        !currentMission.id ||
+        fullTxt.includes(currentMission.id) ||
+        (
+            targetMonth &&
+            targetDay &&
+            fullTxt.includes(targetMonth) &&
+            fullTxt.includes(targetDay)
+        )
+    )
+) {
       if (!fullTxt) return false;
       let t1Match = t1 !== "tbd" && t1A.some(a => fullTxt.includes(a));
       let t2Match = t2 !== "tbd" && t2A.some(a => fullTxt.includes(a));
