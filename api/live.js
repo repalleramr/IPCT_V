@@ -13,6 +13,9 @@ module.exports = async function (req, res) {
 
   if (!targetTeams) return res.status(200).json({ success: false, error: "Awaiting Target Intel..." });
 
+  // DATE TARGET LOCK: Extracts "may 14" from "May 14 (7:30 PM)" to prevent duplicate match errors
+  let dateTarget = rawDateStr ? rawDateStr.split('(')[0].trim().toLowerCase() : "";
+
   const teamAliases = {
     "chennai": ["csk", "chennai", "super kings"],
     "delhi": ["dc", "delhi", "capitals"],
@@ -59,7 +62,6 @@ module.exports = async function (req, res) {
       'Accept': 'application/json, text/plain, */*'
   };
 
-  // Helper: Safely merges data
   function mergeIntel(newData) {
       if (!payload.live_score && newData.live_score) payload.live_score = newData.live_score;
       if (!payload.status && newData.status) payload.status = newData.status;
@@ -76,11 +78,11 @@ module.exports = async function (req, res) {
       if (newData.source_url) payload.source_url = newData.source_url;
   }
 
-  // Helper: Checks if the current Seller gave us everything we need
   function isIntelSufficient() {
       let hasStatus = payload.status && payload.status.length > 3;
       let hasVenue = payload.venue && payload.venue.length > 3;
-      return hasStatus && hasVenue;
+      let hasToss = payload.toss && payload.toss.length > 3;
+      return hasStatus && hasVenue && hasToss;
   }
 
   try {
@@ -128,25 +130,33 @@ module.exports = async function (req, res) {
     }
 
     // ==============================================================
-    // SELLER 2: CREX DIRECT HTML (If ESPN failed)
+    // SELLER 2: CREX DIRECT HTML (With Date Target Lock)
     // ==============================================================
     if (!isIntelSufficient()) {
         try {
             let crexData = {};
             let res = await axios.get('https://crex.com/series/indian-premier-league-2026-1PW/matches', { headers, timeout: 3500 });
             let $cx = cheerio.load(res.data);
-            let cxMatchUrl = null;
+            
+            let bestCxUrl = null;
+            let backupCxUrl = null;
             
             $cx('a').each((i, el) => {
                 let href = $cx(el).attr('href') || "";
                 let txt = ($cx(el).text() + " " + href).toLowerCase();
+                let parentTxt = $cx(el).parent().parent().text().toLowerCase();
+                let fullTxt = txt + " " + parentTxt;
+
                 if (href.includes('cricket-live-score') || href.includes('match-details')) {
-                    if (t1A.some(a => txt.includes(a)) && t2A.some(a => txt.includes(a))) {
-                        cxMatchUrl = href.startsWith('http') ? href : 'https://crex.com' + href;
-                        return false;
+                    if (t1A.some(a => fullTxt.includes(a)) && t2A.some(a => fullTxt.includes(a))) {
+                        let fullUrl = href.startsWith('http') ? href : 'https://crex.com' + href;
+                        if (dateTarget && fullTxt.includes(dateTarget)) bestCxUrl = fullUrl;
+                        else backupCxUrl = fullUrl; // Saves the old match just in case
                     }
                 }
             });
+
+            let cxMatchUrl = bestCxUrl || backupCxUrl;
 
             if (cxMatchUrl) {
                 crexData.source_url = cxMatchUrl;
@@ -156,7 +166,8 @@ module.exports = async function (req, res) {
                 let $m = cheerio.load(mRes.data);
                 let rawText = $m('body').text().replace(/\s+/g, ' ');
 
-                let winMatch = rawText.match(/([a-zA-Z0-9\s]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
+                // BUG FIX: Stripped numbers out of team name regex
+                let winMatch = rawText.match(/([a-zA-Z\s]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
                 if (winMatch) crexData.status = winMatch[1].trim();
 
                 let venueMatch = rawText.match(/Venue\s*:\s*(.*?)(?=\s+Toss|\s+Umpires|\s+Match)/i);
@@ -174,55 +185,86 @@ module.exports = async function (req, res) {
     }
 
     // ==============================================================
-    // SELLER 3: CRICBUZZ MOBILE (If CREX also failed)
+    // SELLER 3: CRICBUZZ MOBILE (With Date Target Lock)
     // ==============================================================
     if (!isIntelSufficient()) {
         try {
             let cbData = {};
             const directories = [
                 'https://m.cricbuzz.com/cricket-match/live-scores',
-                'https://m.cricbuzz.com/cricket-match/live-scores/recent-matches'
+                'https://m.cricbuzz.com/cricket-match/live-scores/recent-matches',
+                'https://m.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches'
             ];
 
-            let cbMatchUrl = null;
+            let bestCbUrl = null;
+            let backupCbUrl = null;
+
             for (const dir of directories) {
                 const { data: dirData } = await axios.get(dir, { headers, timeout: 3000 });
                 const $d = cheerio.load(dirData);
+                
                 $d('a').each((i, el) => {
                     const href = $d(el).attr('href') || "";
-                    const text = ($d(el).text() + " " + href).toLowerCase();
+                    const txt = $d(el).text().toLowerCase();
+                    const parentTxt = $d(el).parent().parent().text().toLowerCase();
+                    const fullTxt = txt + " " + parentTxt;
+
                     if (href.includes('/live-cricket-scores/') || href.includes('/cricket-scores/')) {
-                        if (t1A.some(a => text.includes(a)) && t2A.some(a => text.includes(a))) {
-                            cbMatchUrl = href.startsWith('http') ? href : 'https://m.cricbuzz.com' + href;
-                            return false; 
+                        if (t1A.some(a => fullTxt.includes(a)) && t2A.some(a => fullTxt.includes(a))) {
+                            let fullUrl = href.startsWith('http') ? href : 'https://m.cricbuzz.com' + href;
+                            if (dateTarget && fullTxt.includes(dateTarget)) bestCbUrl = fullUrl;
+                            else backupCbUrl = fullUrl; 
                         }
                     }
                 });
-                if (cbMatchUrl) break; 
+                if (bestCbUrl) break; 
             }
 
+            let cbMatchUrl = bestCbUrl || backupCbUrl;
+
             if (cbMatchUrl) {
-                let safeUrl = cbMatchUrl.replace('/live-cricket-scores/', '/live-cricket-scorecard/').replace('/cricket-scores/', '/live-cricket-scorecard/');
-                cbData.source = "seller-3-cricbuzz";
-                cbData.source_url = safeUrl;
+                let scorecardUrl = cbMatchUrl.replace('/live-cricket-scores/', '/live-cricket-scorecard/').replace('/cricket-scores/', '/live-cricket-scorecard/');
+                let factsUrl = cbMatchUrl.replace('/live-cricket-scores/', '/cricket-match-facts/').replace('/cricket-scores/', '/cricket-match-facts/');
+                
+                cbData.source = "seller-3-cricbuzz-deep";
+                cbData.source_url = scorecardUrl;
 
-                const { data: mHtml } = await axios.get(safeUrl, { headers, timeout: 4000 });
-                const $m = cheerio.load(mHtml);
-                let rawBodyText = $m('body').text().replace(/\s+/g, ' ');
+                const [scRes, factsRes] = await Promise.allSettled([
+                    axios.get(scorecardUrl, { headers, timeout: 4000 }),
+                    axios.get(factsUrl, { headers, timeout: 4000 })
+                ]);
 
-                let winMatch = rawBodyText.match(/([a-zA-Z0-9\s]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
-                if (winMatch) cbData.status = winMatch[1].trim();
-                else cbData.status = $m('.cb-text-complete, .ui-match-status, .cb-status-msg').first().text().trim();
+                if (factsRes.status === 'fulfilled') {
+                    const $f = cheerio.load(factsRes.value.data);
+                    $f('div, span').each((i, el) => {
+                        let text = $f(el).text().trim().replace(/\s+/g, ' ');
+                        if (!cbData.venue && text.match(/^Venue\s*:/i)) {
+                            cbData.venue = text.split(/Venue\s*:/i)[1].split(/•|Date|{/)[0].trim();
+                        }
+                        if (!cbData.toss && text.match(/^Toss\s*:/i)) {
+                            cbData.toss = text.split(/Toss\s*:/i)[1].split(/•|Date|Time|{/)[0].trim();
+                        }
+                        if (!cbData.status && text.match(/^Result\s*:/i)) {
+                            cbData.status = text.split(/Result\s*:/i)[1].trim();
+                        }
+                    });
+                }
 
-                $m('div, span').each((i, el) => {
-                    let text = $m(el).text().trim().replace(/\s+/g, ' ');
-                    if (!cbData.venue && text.startsWith('Venue:')) cbData.venue = text.split('Venue:')[1].split(/•|Date &|{/)[0].trim();
-                    if (!cbData.toss && text.startsWith('Toss:')) cbData.toss = text.split('Toss:')[1].trim();
-                });
+                if (scRes.status === 'fulfilled') {
+                    const $m = cheerio.load(scRes.value.data);
+                    let rawBodyText = $m('body').text().replace(/\s+/g, ' ');
 
-                let teamScores = [];
-                $m('.ui-bat-team-scores, .cb-min-bat-rw').each((i, el) => teamScores.push($m(el).text().trim()));
-                if (teamScores.length > 0) cbData.live_score = teamScores.join(' v ');
+                    // BUG FIX: Strict regex excludes numbers
+                    if (!cbData.status) {
+                        let winMatch = rawBodyText.match(/([a-zA-Z\s]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
+                        if (winMatch) cbData.status = winMatch[1].trim();
+                        else cbData.status = $m('.cb-text-complete, .ui-match-status, .cb-status-msg').first().text().trim();
+                    }
+
+                    let teamScores = [];
+                    $m('.ui-bat-team-scores, .cb-min-bat-rw').each((i, el) => teamScores.push($m(el).text().trim()));
+                    if (teamScores.length > 0) cbData.live_score = teamScores.join(' v ');
+                }
 
                 mergeIntel(cbData);
             }
@@ -230,9 +272,9 @@ module.exports = async function (req, res) {
     }
 
     // ==============================================================
-    // SELLER 4: RSS XML FEEDS (Last Resort)
+    // SELLER 4: RSS XML FEEDS
     // ==============================================================
-    if (!payload.status) {
+    if (!payload.status || !payload.live_score) {
         try {
             let xmlData = {};
             const { data: xmlBody } = await axios.get('https://www.espncricinfo.com/rss/livescores.xml', { timeout: 3000 });
@@ -240,7 +282,11 @@ module.exports = async function (req, res) {
             $x('item').each((i, el) => {
                 const title = $x(el).find('title').text().toLowerCase();
                 if (t1A.some(a => title.includes(a)) && t2A.some(a => title.includes(a))) {
-                    xmlData.status = $x(el).find('description').text().trim();
+                    if (!payload.status) xmlData.status = $x(el).find('description').text().trim();
+                    if (!payload.live_score) {
+                        let scoreMatch = $x(el).find('title').text().split(' vs ')[0].trim();
+                        if (scoreMatch.match(/\d+\/\d+/)) xmlData.live_score = scoreMatch;
+                    }
                     xmlData.source = "seller-4-xml";
                     return false; 
                 }
@@ -274,7 +320,7 @@ module.exports = async function (req, res) {
         payload.prediction = "Active Tracking...";
     }
 
-    // Countdown Timer
+    // Countdown Timer Engine
     if (rawDateStr && (payload.match_state === "standby" || payload.match_state === "pre-match" || payload.match_state === "delay")) {
         try {
             let monthStr = rawDateStr.split(' ')[0]; let dayStr = rawDateStr.split(' ')[1];
@@ -296,7 +342,7 @@ module.exports = async function (req, res) {
         } catch(e) {}
     }
 
-    // Fallbacks 
+    // Post-Cascade Fallbacks 
     if (!payload.live_score) payload.live_score = "Intel Unavailable";
     if (!payload.venue) payload.venue = "Location Secure";
     if (!payload.toss) payload.toss = "Awaiting Coin Drop";
