@@ -33,7 +33,7 @@ module.exports = async function (req, res) {
 
   let payload = {
         title: "IPL LIVE INTEL",
-        status: "Intel Gathering...",
+        status: null,
         match_state: "standby",
         live_score: null,
         overs: null,
@@ -63,7 +63,7 @@ module.exports = async function (req, res) {
     let matchFound = false;
 
     // ==============================================================
-    // ENGINE 1: ESPNCricinfo JSON API (Checks Current AND Recent)
+    // ENGINE 1: ESPNCricinfo JSON API (Live & Recent 48hrs)
     // ==============================================================
     const espnEndpoints = [
         'https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current?lang=en&latest=true',
@@ -72,7 +72,7 @@ module.exports = async function (req, res) {
 
     for (let url of espnEndpoints) {
         try {
-            let { data } = await axios.get(url, { headers, timeout: 4000 });
+            let { data } = await axios.get(url, { headers, timeout: 3000 });
             if (data && data.matches) {
                 for (let m of data.matches) {
                     let tNames = m.teams.map(t => (t.team.longName + " " + t.team.abbreviation).toLowerCase());
@@ -100,41 +100,6 @@ module.exports = async function (req, res) {
                             }
                         });
                         if (scores.length > 0) payload.live_score = scores.join(' v ');
-
-                        // Deep Dive for Live/Completed Match Stats
-                        if (payload.match_state === 'live' || payload.match_state === 'completed') {
-                            try {
-                                let detailsUrl = `https://hs-consumer-api.espncricinfo.com/v1/pages/match/details?lang=en&seriesId=${m.series.objectId}&matchId=${m.objectId}&latest=true`;
-                                let { data: dData } = await axios.get(detailsUrl, { headers, timeout: 3000 });
-                                
-                                if (dData && dData.recentBallCommentary) {
-                                    let balls = dData.recentBallCommentary.ballComments;
-                                    let overHistory = [];
-                                    for (let i = 0; i < Math.min(balls.length, 6); i++) {
-                                        let b = balls[i];
-                                        if (b.isWicket) overHistory.unshift("W");
-                                        else if (b.isFour) overHistory.unshift("4");
-                                        else if (b.isSix) overHistory.unshift("6");
-                                        else overHistory.unshift(b.totalRuns.toString());
-                                    }
-                                    if (overHistory.length > 0) payload.last_over = overHistory;
-                                }
-                                if (dData.supportInfo && dData.supportInfo.liveInning) {
-                                    let li = dData.supportInfo.liveInning;
-                                    if (li.currentRunRate) payload.current_rr = li.currentRunRate.toString();
-                                    if (li.requiredRunRate) payload.required_rr = li.requiredRunRate.toString();
-                                    if (li.target) payload.target = li.target.toString();
-
-                                    if (li.batsmen && li.batsmen.length > 0) {
-                                        payload.striker = li.batsmen[0].player.shortName;
-                                        if (li.batsmen.length > 1) payload.non_striker = li.batsmen[1].player.shortName;
-                                    }
-                                    if (li.bowlers && li.bowlers.length > 0) {
-                                        payload.bowler = li.bowlers[0].player.shortName;
-                                    }
-                                }
-                            } catch(e) {}
-                        }
                         break;
                     }
                 }
@@ -144,13 +109,14 @@ module.exports = async function (req, res) {
     }
 
     // ==============================================================
-    // ENGINE 2: CRICBUZZ MOBILE HTML (If ESPN is down or missing it)
+    // ENGINE 2: CRICBUZZ DEEP ARCHIVE (For older completed matches)
     // ==============================================================
     if (!matchFound) {
         const cbHeaders = { 'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36' };
         const directories = [
             'https://m.cricbuzz.com/cricket-match/live-scores',
-            'https://m.cricbuzz.com/cricket-match/live-scores/recent-matches'
+            'https://m.cricbuzz.com/cricket-match/live-scores/recent-matches',
+            'https://m.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches'
         ];
 
         let cbMatchUrl = null;
@@ -180,70 +146,64 @@ module.exports = async function (req, res) {
             const { data: mHtml } = await axios.get(payload.source_url, { headers: cbHeaders, timeout: 5000 });
             const $m = cheerio.load(mHtml);
 
-            // STRICT DOM EXTRACTION (No messy global regex)
             let pageTitle = $m('title').text() || "";
-            
-            // Score
-            let teamScores = [];
-            $m('.ui-bat-team-scores').each((i, el) => teamScores.push($m(el).text().trim()));
-            if (teamScores.length > 0) {
-                payload.live_score = teamScores.join(' v ');
-            } else {
-                let ts = pageTitle.split(',')[0].split('|')[0].trim();
-                if (ts.match(/\d+\/\d+/)) payload.live_score = ts;
+            let rawText = $m('body').text().replace(/\s+/g, ' ');
+
+            // 1. EXTRACT RESULT / STATUS (Rip directly from page title)
+            // Example: "KKR vs RCB - Kolkata won by 4 wickets - Live Cricket Score"
+            pageTitle.split('-').forEach(part => {
+                if (part.toLowerCase().includes('won by') || part.toLowerCase().includes('tied')) {
+                    payload.status = part.trim();
+                }
+            });
+            if (!payload.status) {
+                payload.status = $m('.cb-text-complete, .ui-match-status, .cb-status-msg').first().text().trim();
             }
 
-            // Status
-            payload.status = $m('.cb-text-complete, .ui-match-status, .cb-status-msg').first().text().trim();
+            // 2. EXTRACT TOSS & VENUE (Deep regex search)
+            let tossMatch = rawText.match(/Toss\s*:\s*(.*?)(?=\s+Venue|\s+Time|\s+Umpires|\s+Squad)/i);
+            if (tossMatch) payload.toss = tossMatch[1].trim();
 
-            // Venue & Toss (Strict 'startsWith' check only)
-            $m('div, span').each((i, el) => {
+            let venueMatch = rawText.match(/Venue\s*:\s*(.*?)(?=\s+Umpires|\s+Toss|\s+Match)/i);
+            if (venueMatch) payload.venue = venueMatch[1].trim();
+
+            // Failsafe for Toss/Venue
+            $m('span, div').each((i, el) => {
                 let text = $m(el).text().trim().replace(/\s+/g, ' ');
-                if (!payload.venue && text.startsWith('Venue:')) {
-                    payload.venue = text.split('Venue:')[1].split(',')[0].trim();
-                }
-                if (!payload.toss && text.startsWith('Toss:')) {
-                    payload.toss = text.split('Toss:')[1].trim();
-                }
-                if (!payload.target && text.startsWith('Target:')) {
-                    payload.target = text.split('Target:')[1].trim();
-                }
+                if (!payload.venue && text.startsWith('Venue:')) payload.venue = text.split('Venue:')[1].split(',')[0].trim();
+                if (!payload.toss && text.startsWith('Toss:')) payload.toss = text.split('Toss:')[1].trim();
             });
 
-            // Players & Radar
-            let batLinks = $m('.cb-live-bat-table a');
-            if (batLinks.length > 0) payload.striker = $m(batLinks[0]).text().trim();
-            if (batLinks.length > 1) payload.non_striker = $m(batLinks[1]).text().trim();
-            let bwlLinks = $m('.cb-live-bwl-table a');
-            if (bwlLinks.length > 0) payload.bowler = $m(bwlLinks[0]).text().trim();
-
-            let balls = [];
-            $m('.cb-ovr-flo span, .cb-text-gray span').each((i, el) => {
-                let b = $m(el).text().trim(); 
-                if (b.length > 0 && b.length <= 3 && b.match(/[0-9W]/)) balls.push(b);
-            });
-            if (balls.length > 0) payload.last_over = balls.slice(-6);
+            // 3. EXTRACT LIVE SCORES (If match is not over)
+            let teamScores = [];
+            $m('.ui-bat-team-scores, .cb-min-bat-rw').each((i, el) => teamScores.push($m(el).text().trim()));
+            if (teamScores.length > 0) payload.live_score = teamScores.join(' v ');
         }
     }
 
     if (!matchFound) throw new Error(`Target ${t1} vs ${t2} completely missing from global matrix.`);
 
     // ==============================================================
-    // MATCH STATE ENGINE (Cleans up the payload)
+    // MATCH STATE ENGINE (Final Formatting)
     // ==============================================================
     let lowerStatus = (payload.status || "").toLowerCase();
-    let isCompleted = lowerStatus.includes('won') || lowerStatus.includes('result') || lowerStatus.includes('tied');
+    let isCompleted = lowerStatus.includes('won by') || lowerStatus.includes('result') || lowerStatus.includes('tied');
 
     if (lowerStatus.includes('abandoned')) {
-        payload.match_state = "abandoned"; payload.title = "MISSION ABORTED";
+        payload.match_state = "abandoned"; 
+        payload.title = "MISSION ABORTED";
+        payload.live_score = "Match Abandoned";
     } else if (lowerStatus.includes('delay') || lowerStatus.includes('rain') || lowerStatus.includes('stumps')) {
-        payload.match_state = "delay"; payload.title = "WEATHER PROTOCOL";
+        payload.match_state = "delay"; 
+        payload.title = "WEATHER PROTOCOL";
     } else if (isCompleted) {
         payload.match_state = "completed"; 
         payload.title = "MISSION ACCOMPLISHED";
         payload.result = payload.status; 
+        payload.live_score = "Match Ended";  // Forcing Score String here!
         payload.last_over = ["E", "N", "D"];
-        payload.striker = null; payload.bowler = "Mission Concluded";
+        payload.striker = null; 
+        payload.bowler = "Mission Concluded";
     } else if (lowerStatus.includes('toss')) {
         payload.match_state = "pre-match"; 
         if (!payload.toss) payload.toss = payload.status;
@@ -274,6 +234,7 @@ module.exports = async function (req, res) {
         } catch(e) {}
     }
 
+    // Failsafe Fallbacks
     if (!payload.live_score) payload.live_score = "Intel Unavailable";
     if (!payload.venue) payload.venue = "Location Secure";
     if (!payload.toss) payload.toss = "Awaiting Coin Drop";
