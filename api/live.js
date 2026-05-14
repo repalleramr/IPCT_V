@@ -50,6 +50,18 @@ module.exports = async function (req, res) {
 
   let currentMission = MASTER_LEDGER[ledgerKey] || { id: "", expected: [] };
 
+  // STRICT DATE LOCK PARSER
+  let targetMonth = "";
+  let targetDay = "";
+  if (rawDateStr) {
+      let cleanStr = rawDateStr.split('(')[0].trim().toLowerCase(); 
+      let parts = cleanStr.split(' ');
+      if (parts.length >= 2) {
+          targetMonth = parts[0].substring(0, 3); 
+          targetDay = parts[1].replace(/\D/g, ''); 
+      }
+  }
+
   // 2. ALIAS ENGINE
   const teamAliases = {
     "chennai": ["csk", "chennai", "super kings"],
@@ -103,12 +115,10 @@ module.exports = async function (req, res) {
              (payload.toss && payload.toss.length > 3);
   }
 
-  // BUG FIX: Removed Date String requirement from Team Matcher!
   function matchesTeams(fullTxt) {
       if (!fullTxt) return false;
       let t1Match = t1 !== "tbd" && t1A.some(a => fullTxt.includes(a));
       let t2Match = t2 !== "tbd" && t2A.some(a => fullTxt.includes(a));
-      
       if (t1Match && t2Match) return true;
       if (currentMission.isPlayoff && currentMission.expected.some(e => fullTxt.includes(e))) return true;
       return false;
@@ -132,7 +142,6 @@ module.exports = async function (req, res) {
                 let { data } = await axios.get(url, { headers, timeout: 3000 });
                 if (data && data.matches) {
                     for (let m of data.matches) {
-                        // ESPN provides internal dates, we use this to lock the match!
                         if (currentMission.id) {
                             let mDate = new Date(m.startTime || m.startDate || "");
                             let mMonth = mDate.toLocaleString('en-US', { month: 'short' }).toLowerCase();
@@ -144,7 +153,6 @@ module.exports = async function (req, res) {
                         let tNames = m.teams.map(t => (t.team.longName + " " + t.team.abbreviation).toLowerCase());
                         let fullTxt = tNames.join(" ") + " " + (m.title || "").toLowerCase();
 
-                        // Now we only check if teams match! No date string needed in title.
                         if (matchesTeams(fullTxt)) {
                             espnData.status = m.statusText || m.status;
                             if (m.tossResults && m.tossResults.text) espnData.toss = m.tossResults.text;
@@ -193,7 +201,7 @@ module.exports = async function (req, res) {
                     if (matchesTeams(fullTxt)) {
                         let fullUrl = href.startsWith('http') ? href : 'https://crex.com' + href;
                         if (currentMission.id && fullTxt.includes(currentMission.id)) bestCxUrl = fullUrl;
-                        else if (!bestCxUrl) backupCxUrl = fullUrl; // Saves as backup if date is missing
+                        else if (!bestCxUrl) backupCxUrl = fullUrl; 
                     }
                 }
             });
@@ -207,18 +215,24 @@ module.exports = async function (req, res) {
                 let mRes = await axios.get(cxMatchUrl, { headers, timeout: 4000 });
                 let $m = cheerio.load(mRes.data);
                 
+                // Top-Body Scanner: Reads only first 1500 chars to avoid footers!
+                let topBody = $m('body').text().replace(/\s+/g, ' ').substring(0, 1500);
+                let bodyWin = topBody.match(/(?:[0-9]+)?([a-zA-Z\s\-]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
+                
                 let pageTitle = $m('title').text() || "";
                 let titleWin = pageTitle.match(/([a-zA-Z\s\-]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
-                if (titleWin) crexData.status = titleWin[1].trim();
+                
+                if (bodyWin) crexData.status = bodyWin[1].trim();
+                else if (titleWin) crexData.status = titleWin[1].trim();
                 else crexData.status = $m('.match-info-status, .status, .match-status').first().text().trim();
 
-                $m('div, span').each((i, el) => {
+                $m('div, span, p').each((i, el) => {
                     let text = $m(el).text().trim().replace(/\s+/g, ' ');
-                    if (!crexData.venue && text.startsWith('Venue:')) crexData.venue = text.split('Venue:')[1].split(/(?=Toss|Umpires|Match)/)[0].trim();
-                    if (!crexData.toss && text.startsWith('Toss:')) crexData.toss = text.split('Toss:')[1].split(/(?=Time|Venue|Umpires)/)[0].trim();
+                    if (!crexData.venue && text.includes('Venue:')) crexData.venue = text.split('Venue:')[1].split(/(?:•|Date|Time|{)/)[0].trim();
+                    if (!crexData.toss && text.includes('Toss:')) crexData.toss = text.split('Toss:')[1].split(/(?:•|Date|Time|Venue|{)/)[0].trim();
                 });
 
-                let scoreMatch = $m('body').text().replace(/\s+/g, ' ').match(/([A-Z-]+\s*\d+\/\d+\s*\([\d\.]+\))/g);
+                let scoreMatch = topBody.match(/([A-Z-]+\s*\d+\/\d+\s*\([\d\.]+\))/g);
                 if (scoreMatch && scoreMatch.length > 0) crexData.live_score = scoreMatch.join(' v ');
 
                 mergeIntel(crexData);
@@ -275,28 +289,38 @@ module.exports = async function (req, res) {
                     axios.get(factsUrl, { headers, timeout: 4000 })
                 ]);
 
-                if (factsRes.status === 'fulfilled') {
-                    const $f = cheerio.load(factsRes.value.data);
-                    $f('div, span').each((i, el) => {
-                        let text = $f(el).text().trim().replace(/\s+/g, ' ');
-                        if (!cbData.venue && text.match(/^Venue\s*:/i)) cbData.venue = text.split(/Venue\s*:/i)[1].split(/•|Date|{/)[0].trim();
-                        if (!cbData.toss && text.match(/^Toss\s*:/i)) cbData.toss = text.split(/Toss\s*:/i)[1].split(/•|Date|Time|{/)[0].trim();
-                        if (!cbData.status && text.match(/^Result\s*:/i)) cbData.status = text.split(/Result\s*:/i)[1].trim();
+                // Reliable Venue & Toss Extraction
+                const extractMatchData = (html) => {
+                    const $p = cheerio.load(html);
+                    $p('div, span, p').each((i, el) => {
+                        let text = $p(el).text().trim().replace(/\s+/g, ' ');
+                        if (!cbData.venue && text.includes('Venue:')) cbData.venue = text.split('Venue:')[1].split(/(?:•|Date|Time|{)/)[0].trim();
+                        if (!cbData.toss && text.includes('Toss:')) cbData.toss = text.split('Toss:')[1].split(/(?:•|Date|Time|Venue|{)/)[0].trim();
+                        if (!cbData.status && text.includes('Result:')) cbData.status = text.split('Result:')[1].split(/(?:•|Date|Time|{)/)[0].trim();
                     });
-                }
+                };
 
+                if (factsRes.status === 'fulfilled') extractMatchData(factsRes.value.data);
+                if (scRes.status === 'fulfilled') extractMatchData(scRes.value.data);
+
+                // Top-Body Scanner for Status
                 if (scRes.status === 'fulfilled') {
                     const $m = cheerio.load(scRes.value.data);
                     
                     if (!cbData.status) {
-                        let pageTitle = $m('title').text() || "";
-                        let titleStatus = "";
-                        pageTitle.split('|')[0].split('-').forEach(part => {
-                            if (part.toLowerCase().includes('won by') || part.toLowerCase().includes('tied')) {
-                                titleStatus = part.replace(/^[0-9]+/, '').trim();
-                            }
-                        });
-                        cbData.status = titleStatus || $m('.cb-text-complete, .ui-match-status, .cb-status-msg').first().text().trim();
+                        let topBody = $m('body').text().replace(/\s+/g, ' ').substring(0, 1500);
+                        let bodyWin = topBody.match(/(?:[0-9]+)?([a-zA-Z\s]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
+                        if (bodyWin) cbData.status = bodyWin[1].trim();
+                        else {
+                            let pageTitle = $m('title').text() || "";
+                            let titleStatus = "";
+                            pageTitle.split('|')[0].split('-').forEach(part => {
+                                if (part.toLowerCase().includes('won by') || part.toLowerCase().includes('tied')) {
+                                    titleStatus = part.replace(/^[0-9]+/, '').trim();
+                                }
+                            });
+                            cbData.status = titleStatus || $m('.cb-text-complete, .ui-match-status, .cb-status-msg').first().text().trim();
+                        }
                     }
 
                     let teamScores = [];
@@ -309,7 +333,7 @@ module.exports = async function (req, res) {
     }
 
     // ==============================================================
-    // SELLER 4: RSS XML FEEDS 
+    // SELLER 4: RSS XML FEEDS
     // ==============================================================
     if (!payload.source_url && (!payload.status || !payload.live_score)) {
         try {
@@ -320,7 +344,6 @@ module.exports = async function (req, res) {
                 const title = $x(el).find('title').text().toLowerCase();
                 const desc = $x(el).find('description').text().toLowerCase();
                 
-                // NO DATE REQUIREMENT FOR XML (Just Team Names)
                 if (matchesTeams(title + " " + desc)) {
                     if (!payload.status) xmlData.status = $x(el).find('description').text().trim();
                     if (!payload.live_score) {
@@ -340,10 +363,17 @@ module.exports = async function (req, res) {
     // ==============================================================
     let lowerStatus = (payload.status || "").toLowerCase();
     
-    // News Footer Protection
     let isFakeNewsResult = false;
     if (lowerStatus.includes('won by')) {
-        if (!matchesTeams(lowerStatus)) isFakeNewsResult = true; 
+        let textIsValid = false;
+        let t1Win = t1 !== "tbd" && t1A.some(alias => lowerStatus.includes(alias));
+        let t2Win = t2 !== "tbd" && t2A.some(alias => lowerStatus.includes(alias));
+        
+        if (t1Win || t2Win) textIsValid = true;
+        if (currentMission.isPlayoff && !textIsValid) {
+             textIsValid = currentMission.expected.some(e => lowerStatus.includes(e));
+        }
+        if (!textIsValid) isFakeNewsResult = true; 
     }
 
     if (isFakeNewsResult) {
@@ -377,7 +407,7 @@ module.exports = async function (req, res) {
     }
 
     // ==============================================================
-    // VERCEL NATIVE TIMEZONE COUNTDOWN ENGINE
+    // VERCEL NATIVE TIMEZONE COUNTDOWN ENGINE (UPGRADED TO 48 HOURS)
     // ==============================================================
     if (rawDateStr && (payload.match_state === "standby" || payload.match_state === "pre-match" || payload.match_state === "delay")) {
         try {
@@ -397,14 +427,17 @@ module.exports = async function (req, res) {
                 let now = new Date(); 
                 let diffMs = targetDate.getTime() - now.getTime();
                 
-                if (diffMs > 0 && diffMs < 86400000) { 
-                    let hrs = Math.floor((diffMs % 86400000) / 3600000);
+                // Timer now triggers if match is within 48 hours (172,800,000 ms)
+                if (diffMs > 0 && diffMs < 172800000) { 
+                    let hrs = Math.floor(diffMs / 3600000);
                     let m = Math.floor(((diffMs % 3600000) / 60000));
                     payload.countdown = `T-MINUS ${hrs}h ${m}m TO OPERATION`;
                     payload.match_state = "countdown";
                     
                     payload.live_score = "Awaiting Deployment";
-                    if (!payload.status || payload.status === "Intel Gathering...") payload.status = "Pre-Match Standby";
+                    if (!payload.status || payload.status === "Intel Gathering..." || payload.status.toLowerCase().includes('won by')) {
+                        payload.status = "Pre-Match Standby";
+                    }
                     payload.result = null; 
                 }
             }
