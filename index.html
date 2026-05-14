@@ -1,181 +1,105 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
-
     <meta charset="UTF-8">
-
-    <meta
-        name="viewport"
-        content="width=device-width, initial-scale=1.0"
-    >
-
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>IPCT Uplink Mirror</title>
-
     <style>
-
         body {
-
             margin: 0;
-
             padding: 0;
-
             background: #000;
-
             color: #00ffcc;
-
-            font-family:
-                monospace;
-
+            font-family: monospace;
             display: flex;
-
             justify-content: center;
-
             align-items: center;
-
             min-height: 100vh;
         }
-
         .container {
-
             width: 90%;
-
             max-width: 700px;
-
             background: #111;
-
-            border:
-                1px solid #222;
-
+            border: 1px solid #222;
             border-radius: 12px;
-
             padding: 30px;
-
-            box-shadow:
-                0 0 25px
-                rgba(0,255,204,0.15);
+            box-shadow: 0 0 25px rgba(0,255,204,0.15);
         }
-
         h1 {
-
             margin-top: 0;
-
             color: #00ffcc;
-
             font-size: 1.7rem;
         }
-
         p {
-
             color: #bbb;
-
             line-height: 1.7;
         }
-
         .status {
-
             margin-top: 20px;
-
             padding: 12px;
-
             background: #07140f;
-
-            border:
-                1px solid #00ffcc;
-
+            border: 1px solid #00ffcc;
             border-radius: 8px;
-
             color: #00ffcc;
-
             font-weight: bold;
         }
-
         .link-box {
-
             margin-top: 25px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
         }
-
-        a {
-
-            display: inline-block;
-
-            color: #fff;
-
-            background: #8a2be2;
-
-            padding: 14px 22px;
-
-            text-decoration: none;
-
-            border-radius: 8px;
-
+        .link-title {
+            color: #8a2be2;
             font-weight: bold;
-
+            margin-top: 15px;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+        }
+        a {
+            display: block;
+            color: #fff;
+            background: #1b1e2b;
+            padding: 14px 22px;
+            text-decoration: none;
+            border-radius: 8px;
+            border: 1px solid #8a2be2;
+            font-weight: bold;
             transition: 0.3s;
+            text-align: center;
         }
-
         a:hover {
-
-            opacity: 0.9;
+            background: #8a2be2;
+            box-shadow: 0 0 15px rgba(138,43,226,0.4);
         }
-
         .footer {
-
-            margin-top: 25px;
-
-            color: #777;
-
+            margin-top: 30px;
+            color: #555;
             font-size: 0.85rem;
+            text-align: center;
         }
-
     </style>
-
 </head>
-
 <body>
 
     <div class="container">
-
-        <h1>
-            📡 IPCT SATELLITE UPLINK ACTIVE
-        </h1>
-
+        <h1>📡 IPCT SATELLITE UPLINK ACTIVE</h1>
         <p>
-
             Real-time IPL telemetry engine is online.
-
             <br><br>
-
-            Hybrid live intelligence powered by:
-            <br>
-            Cricbuzz + Crex fallback engine.
-
+            Hybrid live intelligence powered by:<br>
+            ESPN + CREX + Cricbuzz Cascade Engine.
         </p>
-
+        
         <div class="status">
-
-            STATUS:
-            LIVE SERVER OPERATIONAL
-
+            > STATUS: LIVE SERVER OPERATIONAL
         </div>
 
         <div class="link-box">
-
-            <a href="/api/live?teams=Royal%20Challengers%20Bengaluru%20vs%20Kolkata%20Knight%20Riders">
-
-                OPEN LIVE DATA FEED
-
+            <div class="link-title">Archive Probe (Completed)</div>
+            <a href="/api/live?teams=Royal%20Challengers%20Bengaluru%20vs%20Kolkata%20Knight%20Riders&time=May%2013%20(7:30%20PM)">
+                TEST: May 13 (RCB vs KKR)
             </a>
 
-        </div>
-
-        <div class="footer">
-
-            IPCT Quantum Oracle Engine v2
-
-        </div>
-
-    </div>
-
-</body>
-</html>
+            <div class="link-title">Countdown Probe (Today)</div>
+            <a href="/api/live?teams=Punjab%20
