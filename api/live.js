@@ -8,7 +8,6 @@ module.exports = async function (req, res) {
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  // The new Direct URL parameter
   let targetUrl = req.query.url || "";
   let rawDateStr = req.query.time || ""; 
 
@@ -41,7 +40,6 @@ module.exports = async function (req, res) {
   const headers = { 'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36' };
 
   try {
-    // Ensure the URL is valid and uses the scorecard layout
     let fetchUrl = targetUrl;
     if (fetchUrl.includes('cricbuzz.com') && fetchUrl.includes('/cricket-scores/')) {
         fetchUrl = fetchUrl.replace('/cricket-scores/', '/live-cricket-scorecard/');
@@ -55,7 +53,6 @@ module.exports = async function (req, res) {
         axios.get(fetchUrl.replace('/live-cricket-scorecard/', '/cricket-match-facts/'), { headers, timeout: 4000 })
     ]);
 
-    // A. Extract Venue & Toss from Facts Page
     if (factsRes.status === 'fulfilled') {
         const $f = cheerio.load(factsRes.value.data);
         $f('div, span, p').each((i, el) => {
@@ -69,12 +66,10 @@ module.exports = async function (req, res) {
         });
     }
 
-    // B. Extract Live Ball-by-Ball Data from Scorecard Page
     if (scRes.status === 'fulfilled') {
         const $m = cheerio.load(scRes.value.data);
         let rawBody = $m('body').text().replace(/\s+/g, ' ');
 
-        // 1. Status & Result Extractor
         let pageTitle = $m('title').text() || "";
         let titleStatus = "";
         pageTitle.split('|')[0].split('-').forEach(part => {
@@ -93,7 +88,6 @@ module.exports = async function (req, res) {
             payload.status = $m('.ui-match-status, .cb-status-msg').first().text().trim() || "Pre-Match Standby";
         }
 
-        // 2. Live Score & Run Rates Extractor
         let scores = [];
         $m('.ui-bat-team-scores, .cb-min-bat-rw, .cb-font-20').each((i, el) => {
             let s = $m(el).text().trim();
@@ -101,33 +95,28 @@ module.exports = async function (req, res) {
         });
         if (scores.length > 0) payload.live_score = scores.join(' v ');
 
-        // Grab Run Rates if they exist
         let crrMatch = rawBody.match(/CRR:\s*([\d\.]+)/i);
         if (crrMatch) payload.current_rr = crrMatch[1];
         let reqMatch = rawBody.match(/REQ:\s*([\d\.]+)/i);
         if (reqMatch) payload.required_rr = reqMatch[1];
 
-        // 3. Live Player Extractor (Striker & Bowler)
         $m('.cb-min-inf.cb-text-link').each((i, el) => {
             let pName = $m(el).text().trim();
             if (i === 0 && pName) payload.striker = pName;
             if (i === 1 && pName) payload.non_striker = pName;
         });
         
-        // Grab Bowler from the bottom box
         $m('.cb-min-bowl-rw .cb-text-link').each((i, el) => {
             let bName = $m(el).text().trim();
             if (i === 0 && bName) payload.bowler = bName;
         });
 
-        // Extract Last Over timeline (e.g., 1 4 W 6)
         let recentBalls = [];
         $m('.cb-min-rcnt span').each((i, el) => {
             let ballText = $m(el).text().trim();
             if (ballText && ballText !== '|') recentBalls.push(ballText);
         });
         if (recentBalls.length > 0) {
-            // Take the last 6 actions
             payload.last_over = recentBalls.slice(-6);
         }
     }
@@ -138,24 +127,17 @@ module.exports = async function (req, res) {
     let lowerStatus = (payload.status || "").toLowerCase();
     let isCompleted = lowerStatus.includes('won by') || lowerStatus.includes('tied');
 
-    if (lowerStatus.includes('abandoned')) {
-        payload.match_state = "abandoned"; 
-    } else if (lowerStatus.includes('delay') || lowerStatus.includes('rain')) {
-        payload.match_state = "delay"; 
-    } else if (isCompleted) {
-        payload.match_state = "completed"; 
-    } else if (payload.live_score !== "Match Not Started") {
-        payload.match_state = "live";
-    }
+    if (lowerStatus.includes('abandoned')) payload.match_state = "abandoned"; 
+    else if (lowerStatus.includes('delay') || lowerStatus.includes('rain')) payload.match_state = "delay"; 
+    else if (isCompleted) payload.match_state = "completed"; 
+    else if (payload.live_score !== "Match Not Started") payload.match_state = "live";
 
-    // The Toss Protocol Logic
     let isTossComplete = payload.toss !== "Awaiting Coin Drop" && payload.toss.length > 5;
     if (payload.match_state === "standby" && isTossComplete) {
         payload.match_state = "pre-match";
-        payload.status = payload.toss; // Puts the toss result in the main status bar!
+        payload.status = payload.toss; 
     }
 
-    // Post-Match Cleanup
     if (payload.match_state === "completed") {
         payload.title = "MISSION ACCOMPLISHED";
         payload.result = payload.status; 
@@ -166,49 +148,51 @@ module.exports = async function (req, res) {
     }
 
     // ==============================================================
-    // 4. DEEP-TIME COUNTDOWN ENGINE
+    // 4. DEEP-TIME COUNTDOWN ENGINE (AUTO-DEFAULT TO 7:30 PM)
     // ==============================================================
     if (rawDateStr && (payload.match_state === "standby" || payload.match_state === "pre-match" || payload.match_state === "delay")) {
         try {
             let monthStr = rawDateStr.split(' ')[0].trim(); 
             let dayStr = parseInt(rawDateStr.split(' ')[1]).toString(); 
+            
+            // AUTO-DEFAULT: Assume 7:30 PM if not specified
+            let timeStr = "7:30 PM"; 
             let timeMatch = rawDateStr.match(/\((.*?)\)/);
-            if (timeMatch) {
-                let timeStr = timeMatch[1]; 
-                let isPM = timeStr.toUpperCase().includes("PM");
-                let timeParts = timeStr.replace(/[a-zA-Z\s]/g, '').split(':');
-                let hours = parseInt(timeParts[0]);
-                if (isPM && hours !== 12) hours += 12;
-                if (!isPM && hours === 12) hours = 0;
-                let mins = parseInt(timeParts[1] || 0);
-                
-                let targetDate = new Date(`${monthStr} ${dayStr}, 2026 ${hours}:${mins}:00 GMT+0530`);
-                let now = new Date(); 
-                let diffMs = targetDate.getTime() - now.getTime();
-                
-                if (diffMs > 0) { 
-                    let totalMins = Math.floor(diffMs / 60000);
-                    let m = totalMins % 60;
-                    let totalHrs = Math.floor(totalMins / 60);
-                    let h = totalHrs % 24;
-                    let totalDays = Math.floor(totalHrs / 24);
-                    let d = totalDays % 7;
-                    let w = Math.floor(totalDays / 7);
+            if (timeMatch) timeStr = timeMatch[1]; 
+            else if (rawDateStr.includes("3:30")) timeStr = "3:30 PM";
 
-                    let cdStr = "T-MINUS ";
-                    if (w > 0) cdStr += `${w}w `;
-                    if (d > 0 || w > 0) cdStr += `${d}d `;
-                    cdStr += `${h}h ${m}m TO OPERATION`;
+            let isPM = timeStr.toUpperCase().includes("PM");
+            let timeParts = timeStr.replace(/[a-zA-Z\s]/g, '').split(':');
+            let hours = parseInt(timeParts[0]);
+            if (isPM && hours !== 12) hours += 12;
+            if (!isPM && hours === 12) hours = 0;
+            let mins = parseInt(timeParts[1] || 0);
+            
+            let targetDate = new Date(`${monthStr} ${dayStr}, 2026 ${hours}:${mins}:00 GMT+0530`);
+            let now = new Date(); 
+            let diffMs = targetDate.getTime() - now.getTime();
+            
+            if (diffMs > 0) { 
+                let totalMins = Math.floor(diffMs / 60000);
+                let m = totalMins % 60;
+                let totalHrs = Math.floor(totalMins / 60);
+                let h = totalHrs % 24;
+                let totalDays = Math.floor(totalHrs / 24);
+                let d = totalDays % 7;
+                let w = Math.floor(totalDays / 7);
 
-                    // The Micro-Timer Protocol: If toss is done, switch to "MINUTES TO FIRST BALL"
-                    if (payload.match_state === "pre-match" && totalHrs === 0) {
-                        payload.countdown = `T-MINUS ${m}m TO FIRST BALL`;
-                    } else {
-                        payload.countdown = cdStr;
-                    }
-                } else if (diffMs <= 0 && payload.match_state !== "live" && payload.match_state !== "completed") {
-                    payload.countdown = "DEPLOYING NOW...";
+                let cdStr = "T-MINUS ";
+                if (w > 0) cdStr += `${w}w `;
+                if (d > 0 || w > 0) cdStr += `${d}d `;
+                cdStr += `${h}h ${m}m TO OPERATION`;
+
+                if (payload.match_state === "pre-match" && totalHrs === 0) {
+                    payload.countdown = `T-MINUS ${m}m TO FIRST BALL`;
+                } else {
+                    payload.countdown = cdStr;
                 }
+            } else if (diffMs <= 0 && payload.match_state !== "live" && payload.match_state !== "completed") {
+                payload.countdown = "DEPLOYING NOW...";
             }
         } catch(e) {}
     }
