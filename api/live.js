@@ -19,49 +19,60 @@ module.exports = async function (req, res) {
     countdown: null
   };
 
-  const headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' };
+  const headers = { 
+    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1',
+    'Accept-Language': 'en-US,en;q=0.9'
+  };
 
   try {
-    // SITE 1 & 2: MULTI-PAGE SCAN (Scorecard + Match Facts)
+    // 1. DUAL-SITE EXTRACTION (Scorecard + Facts)
     const factsUrl = targetUrl.replace('/live-cricket-scorecard/', '/cricket-match-facts/');
     const [scRes, factsRes] = await Promise.allSettled([
-        axios.get(targetUrl, { headers, timeout: 3000 }),
-        axios.get(factsUrl, { headers, timeout: 3000 })
+        axios.get(targetUrl, { headers, timeout: 3500 }),
+        axios.get(factsUrl, { headers, timeout: 3500 })
     ]);
 
-    let combinedHtml = "";
-    if (scRes.status === 'fulfilled') combinedHtml += scRes.value.data;
-    if (factsRes.status === 'fulfilled') combinedHtml += factsRes.value.data;
-
+    // 2. NUCLEAR TOSS SCAN (Check Facts first, then Scorecard)
+    let combinedHtml = (factsRes.status === 'fulfilled' ? factsRes.value.data : "") + 
+                       (scRes.status === 'fulfilled' ? scRes.value.data : "");
+    
     if (combinedHtml) {
         const $ = cheerio.load(combinedHtml);
-        let bodyText = $('body').text().replace(/\s+/g, ' ');
+        let pageText = $('body').text().replace(/\s+/g, ' ');
 
-        // SITE 3: THE REGEX MERCENARY
-        // We hunt for the "won the toss" string across the entire raw HTML text
-        let tossPattern = bodyText.match(/([A-Z][a-z]+\s[A-Za-z]+\swon the toss and (?:opted|elected|chose) to (?:bat|bowl) first)/i);
-        
-        if (tossPattern) {
-            payload.toss = tossPattern[1].trim();
-        } else {
-            // SITE 4: EMERGENCY JSON FALLBACK (The "Oracle" logic)
-            // If scraping fails, we use our known intelligence for May 14, 2026
-            if (targetUrl.includes("152141") || targetUrl.includes("pbks-vs-mi")) {
-                payload.toss = "Mumbai Indians won the toss and chose to bowl first";
-            }
-        }
-
-        // SYNC STATUS: Update the Gold field in your UI
-        if (payload.toss !== "Awaiting Coin Drop") {
-            payload.status = payload.toss;
+        // FORCE SEARCH: Search for the toss pattern in raw text
+        let tossMatch = pageText.match(/([A-Z][a-z]+\s[A-Za-z]+\swon the toss and[^•|!]+)/i);
+        if (tossMatch) {
+            payload.toss = tossMatch[1].trim();
+            payload.status = payload.toss; // Injects toss into your Gold Status field
             payload.match_state = "pre-match";
         }
 
-        // LIVE SCORE DETECTION
-        let liveScore = $('.cb-font-20').first().text().trim();
-        if (liveScore && /\d/.test(liveScore)) {
-            payload.live_score = liveScore;
+        // 3. SCORE & VENUE UPDATE
+        let score = $('.cb-font-20').first().text().trim();
+        if (score && /\d/.test(score)) {
+            payload.live_score = score;
             payload.match_state = "live";
-            payload.status = "Match Underway";
+            payload.status = "LIVE: Dharamsala Operation";
         } else if (payload.match_state === "pre-match") {
-            payload.
+            payload.live_score = "TOSS DECIDED";
+        }
+    }
+
+    // 4. COUNTDOWN ENGINE (PBKS vs MI @ 7:30 PM)
+    if (rawDateStr && payload.match_state !== "live") {
+        let now = new Date();
+        let target = new Date(`May 14, 2026 19:30:00 GMT+0530`);
+        let diff = target - now;
+        if (diff > 0) {
+            let m = Math.floor(diff / 60000);
+            payload.countdown = `T-MINUS ${m}m TO FIRST BALL`;
+        } else { payload.countdown = "DEPLOYING NOW..."; }
+    }
+
+    return res.status(200).json({ success: true, match_info: payload });
+
+  } catch (err) {
+    return res.status(200).json({ success: false, error: "Satellite Sync Error" });
+  }
+};
