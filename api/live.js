@@ -13,9 +13,7 @@ module.exports = async function (req, res) {
 
   if (!targetTeams) return res.status(200).json({ success: false, error: "Awaiting Target Intel..." });
 
-  // ==============================================================
-  // 1. THE HARDCODED MASTER LEDGER (MAY 11 - MAY 31)
-  // ==============================================================
+  // 1. MASTER LEDGER (MAY 11 - MAY 31)
   const MASTER_LEDGER = {
       "may 11": { id: "may 11", expected: ["punjab", "delhi", "pbks", "dc"] },
       "may 12": { id: "may 12", expected: ["gujarat", "sunrisers", "gt", "srh"] },
@@ -52,23 +50,7 @@ module.exports = async function (req, res) {
 
   let currentMission = MASTER_LEDGER[ledgerKey] || { id: "", expected: [] };
 
-  // ==========================================
-  // STRICT DATE LOCK PARSER
-  // ==========================================
-  let targetMonth = "";
-  let targetDay = "";
-  if (rawDateStr) {
-      let cleanStr = rawDateStr.split('(')[0].trim().toLowerCase(); 
-      let parts = cleanStr.split(' ');
-      if (parts.length >= 2) {
-          targetMonth = parts[0].substring(0, 3); 
-          targetDay = parts[1].replace(/\D/g, ''); 
-      }
-  }
-
-  // ==============================================================
-  // 2. INTELLIGENT ALIAS ENGINE
-  // ==============================================================
+  // 2. ALIAS ENGINE
   const teamAliases = {
     "chennai": ["csk", "chennai", "super kings"],
     "delhi": ["dc", "delhi", "capitals"],
@@ -78,7 +60,7 @@ module.exports = async function (req, res) {
     "mumbai": ["mi", "mumbai", "indians"],
     "punjab": ["pbks", "punjab", "kings"],
     "rajasthan": ["rr", "rajasthan", "royals"],
-    "royal": ["rcb", "bengaluru", "bangalore", "challengers"],
+    "royal": ["rcb", "bengaluru", "bangalore", "challengers", "royal challengers"],
     "sunrisers": ["srh", "hyderabad", "sunrisers"],
     "tbd": ["tbd"]
   };
@@ -121,30 +103,20 @@ module.exports = async function (req, res) {
              (payload.toss && payload.toss.length > 3);
   }
 
-  function linkMatchesLedger(fullTxt) {
-      let hasTeams = false;
+  // BUG FIX: Removed Date String requirement from Team Matcher!
+  function matchesTeams(fullTxt) {
+      if (!fullTxt) return false;
       let t1Match = t1 !== "tbd" && t1A.some(a => fullTxt.includes(a));
       let t2Match = t2 !== "tbd" && t2A.some(a => fullTxt.includes(a));
-
-      if (t1Match && t2Match) {
-          hasTeams = true;
-      } else if (currentMission.isPlayoff) {
-          hasTeams = currentMission.expected.some(e => fullTxt.includes(e));
-      }
-
-      if (!hasTeams) return false;
-
-      if (currentMission.id) {
-          if (!fullTxt.includes(currentMission.id) && !fullTxt.includes('today') && !fullTxt.includes('tomorrow')) {
-              return false;
-          }
-      }
-      return true;
+      
+      if (t1Match && t2Match) return true;
+      if (currentMission.isPlayoff && currentMission.expected.some(e => fullTxt.includes(e))) return true;
+      return false;
   }
 
   try {
     // ==============================================================
-    // SELLER 1: ESPN JSON API
+    // SELLER 1: ESPN JSON API 
     // ==============================================================
     if (!isIntelSufficient()) {
         try {
@@ -160,6 +132,7 @@ module.exports = async function (req, res) {
                 let { data } = await axios.get(url, { headers, timeout: 3000 });
                 if (data && data.matches) {
                     for (let m of data.matches) {
+                        // ESPN provides internal dates, we use this to lock the match!
                         if (currentMission.id) {
                             let mDate = new Date(m.startTime || m.startDate || "");
                             let mMonth = mDate.toLocaleString('en-US', { month: 'short' }).toLowerCase();
@@ -171,11 +144,13 @@ module.exports = async function (req, res) {
                         let tNames = m.teams.map(t => (t.team.longName + " " + t.team.abbreviation).toLowerCase());
                         let fullTxt = tNames.join(" ") + " " + (m.title || "").toLowerCase();
 
-                        if (linkMatchesLedger(fullTxt)) {
+                        // Now we only check if teams match! No date string needed in title.
+                        if (matchesTeams(fullTxt)) {
                             espnData.status = m.statusText || m.status;
                             if (m.tossResults && m.tossResults.text) espnData.toss = m.tossResults.text;
                             if (m.ground && m.ground.name) espnData.venue = m.ground.name;
                             espnData.source = "seller-1-espn";
+                            espnData.source_url = `https://www.espncricinfo.com/series/${m.series.objectId}/match/${m.objectId}/live-cricket-score`;
                             
                             let scores = [];
                             m.teams.forEach(t => {
@@ -198,14 +173,15 @@ module.exports = async function (req, res) {
     }
 
     // ==============================================================
-    // SELLER 2: CREX HTML
+    // SELLER 2: CREX HTML 
     // ==============================================================
     if (!isIntelSufficient()) {
         try {
             let crexData = {};
             let res = await axios.get('https://crex.com/series/indian-premier-league-2026-1PW/matches', { headers, timeout: 3500 });
             let $cx = cheerio.load(res.data);
-            let cxMatchUrl = null;
+            let bestCxUrl = null;
+            let backupCxUrl = null;
             
             $cx('a').each((i, el) => {
                 let href = $cx(el).attr('href') || "";
@@ -214,12 +190,15 @@ module.exports = async function (req, res) {
                 let fullTxt = txt + " " + parentTxt;
 
                 if (href.includes('cricket-live-score') || href.includes('match-details')) {
-                    if (linkMatchesLedger(fullTxt)) {
-                        cxMatchUrl = href.startsWith('http') ? href : 'https://crex.com' + href;
-                        return false; 
+                    if (matchesTeams(fullTxt)) {
+                        let fullUrl = href.startsWith('http') ? href : 'https://crex.com' + href;
+                        if (currentMission.id && fullTxt.includes(currentMission.id)) bestCxUrl = fullUrl;
+                        else if (!bestCxUrl) backupCxUrl = fullUrl; // Saves as backup if date is missing
                     }
                 }
             });
+
+            let cxMatchUrl = bestCxUrl || backupCxUrl;
 
             if (cxMatchUrl) {
                 crexData.source_url = cxMatchUrl;
@@ -258,7 +237,8 @@ module.exports = async function (req, res) {
                 'https://m.cricbuzz.com/cricket-match/live-scores'
             ];
 
-            let cbMatchUrl = null;
+            let bestCbUrl = null;
+            let backupCbUrl = null;
 
             for (const dir of directories) {
                 const { data: dirData } = await axios.get(dir, { headers, timeout: 3000 });
@@ -271,14 +251,17 @@ module.exports = async function (req, res) {
                     const fullTxt = txt + " " + parentTxt;
 
                     if (href.includes('/live-cricket-scores/') || href.includes('/cricket-scores/')) {
-                        if (linkMatchesLedger(fullTxt)) {
-                            cbMatchUrl = href.startsWith('http') ? href : 'https://m.cricbuzz.com' + href;
-                            return false; 
+                        if (matchesTeams(fullTxt)) {
+                            let fullUrl = href.startsWith('http') ? href : 'https://m.cricbuzz.com' + href;
+                            if (currentMission.id && fullTxt.includes(currentMission.id)) bestCbUrl = fullUrl;
+                            else if (!bestCbUrl) backupCbUrl = fullUrl; 
                         }
                     }
                 });
-                if (cbMatchUrl) break; 
+                if (bestCbUrl) break; 
             }
+
+            let cbMatchUrl = bestCbUrl || backupCbUrl;
 
             if (cbMatchUrl) {
                 let scorecardUrl = cbMatchUrl.replace('/live-cricket-scores/', '/live-cricket-scorecard/').replace('/cricket-scores/', '/live-cricket-scorecard/');
@@ -326,7 +309,7 @@ module.exports = async function (req, res) {
     }
 
     // ==============================================================
-    // SELLER 4: RSS XML FEEDS
+    // SELLER 4: RSS XML FEEDS 
     // ==============================================================
     if (!payload.source_url && (!payload.status || !payload.live_score)) {
         try {
@@ -337,7 +320,8 @@ module.exports = async function (req, res) {
                 const title = $x(el).find('title').text().toLowerCase();
                 const desc = $x(el).find('description').text().toLowerCase();
                 
-                if (linkMatchesLedger(title + " " + desc)) {
+                // NO DATE REQUIREMENT FOR XML (Just Team Names)
+                if (matchesTeams(title + " " + desc)) {
                     if (!payload.status) xmlData.status = $x(el).find('description').text().trim();
                     if (!payload.live_score) {
                         let scoreMatch = $x(el).find('title').text().split(' vs ')[0].trim();
@@ -356,17 +340,10 @@ module.exports = async function (req, res) {
     // ==============================================================
     let lowerStatus = (payload.status || "").toLowerCase();
     
+    // News Footer Protection
     let isFakeNewsResult = false;
     if (lowerStatus.includes('won by')) {
-        let textIsValid = false;
-        let t1Win = t1 !== "tbd" && t1A.some(alias => lowerStatus.includes(alias));
-        let t2Win = t2 !== "tbd" && t2A.some(alias => lowerStatus.includes(alias));
-        
-        if (t1Win || t2Win) textIsValid = true;
-        if (currentMission.isPlayoff && !textIsValid) {
-             textIsValid = currentMission.expected.some(e => lowerStatus.includes(e));
-        }
-        if (!textIsValid) isFakeNewsResult = true; 
+        if (!matchesTeams(lowerStatus)) isFakeNewsResult = true; 
     }
 
     if (isFakeNewsResult) {
@@ -416,7 +393,6 @@ module.exports = async function (req, res) {
                 if (!isPM && hours === 12) hours = 0;
                 let mins = parseInt(timeParts[1] || 0);
                 
-                // BUILDS THE DATE USING EXPLICIT INDIAN STANDARD TIME OFFSET
                 let targetDate = new Date(`${monthStr} ${dayStr}, 2026 ${hours}:${mins}:00 GMT+0530`);
                 let now = new Date(); 
                 let diffMs = targetDate.getTime() - now.getTime();
