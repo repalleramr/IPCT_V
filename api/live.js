@@ -15,7 +15,6 @@ module.exports = async function (req, res) {
 
   // ==============================================================
   // 1. THE HARDCODED MASTER LEDGER (MAY 11 - MAY 31)
-  // This explicitly maps every single date to the exact event.
   // ==============================================================
   const MASTER_LEDGER = {
       "may 11": { id: "may 11", expected: ["punjab", "delhi", "pbks", "dc"] },
@@ -40,7 +39,6 @@ module.exports = async function (req, res) {
       "may 31": { id: "may 31", expected: ["final"], isPlayoff: true }
   };
 
-  // Find the specific mission profile based on the incoming request URL
   let requestTime = rawDateStr.toLowerCase();
   let ledgerKey = "";
   Object.keys(MASTER_LEDGER).forEach(key => {
@@ -53,6 +51,20 @@ module.exports = async function (req, res) {
   });
 
   let currentMission = MASTER_LEDGER[ledgerKey] || { id: "", expected: [] };
+
+  // ==========================================
+  // STRICT DATE LOCK PARSER
+  // ==========================================
+  let targetMonth = "";
+  let targetDay = "";
+  if (rawDateStr) {
+      let cleanStr = rawDateStr.split('(')[0].trim().toLowerCase(); 
+      let parts = cleanStr.split(' ');
+      if (parts.length >= 2) {
+          targetMonth = parts[0].substring(0, 3); 
+          targetDay = parts[1].replace(/\D/g, ''); 
+      }
+  }
 
   // ==============================================================
   // 2. INTELLIGENT ALIAS ENGINE
@@ -109,24 +121,19 @@ module.exports = async function (req, res) {
              (payload.toss && payload.toss.length > 3);
   }
 
-  // Verification Engine: Checks if a scraped link perfectly matches the Master Ledger
   function linkMatchesLedger(fullTxt) {
       let hasTeams = false;
       let t1Match = t1 !== "tbd" && t1A.some(a => fullTxt.includes(a));
       let t2Match = t2 !== "tbd" && t2A.some(a => fullTxt.includes(a));
 
-      // 1. Did the user put real team names in the dropdown?
       if (t1Match && t2Match) {
           hasTeams = true;
-      } 
-      // 2. If it's a Playoff game (TBD), look for the playoff phrase ("Qualifier 1")
-      else if (currentMission.isPlayoff) {
+      } else if (currentMission.isPlayoff) {
           hasTeams = currentMission.expected.some(e => fullTxt.includes(e));
       }
 
       if (!hasTeams) return false;
 
-      // 3. DATE LOCK: The link's text MUST belong to the target date.
       if (currentMission.id) {
           if (!fullTxt.includes(currentMission.id) && !fullTxt.includes('today') && !fullTxt.includes('tomorrow')) {
               return false;
@@ -137,7 +144,7 @@ module.exports = async function (req, res) {
 
   try {
     // ==============================================================
-    // SELLER 1: ESPN JSON API (Date & Ledger Locked)
+    // SELLER 1: ESPN JSON API
     // ==============================================================
     if (!isIntelSufficient()) {
         try {
@@ -153,7 +160,6 @@ module.exports = async function (req, res) {
                 let { data } = await axios.get(url, { headers, timeout: 3000 });
                 if (data && data.matches) {
                     for (let m of data.matches) {
-                        // Date Verification
                         if (currentMission.id) {
                             let mDate = new Date(m.startTime || m.startDate || "");
                             let mMonth = mDate.toLocaleString('en-US', { month: 'short' }).toLowerCase();
@@ -192,7 +198,7 @@ module.exports = async function (req, res) {
     }
 
     // ==============================================================
-    // SELLER 2: CREX HTML (Ledger Locked)
+    // SELLER 2: CREX HTML
     // ==============================================================
     if (!isIntelSufficient()) {
         try {
@@ -242,7 +248,7 @@ module.exports = async function (req, res) {
     }
 
     // ==============================================================
-    // SELLER 3: CRICBUZZ MOBILE (Ledger Locked)
+    // SELLER 3: CRICBUZZ MOBILE
     // ==============================================================
     if (!isIntelSufficient()) {
         try {
@@ -320,7 +326,7 @@ module.exports = async function (req, res) {
     }
 
     // ==============================================================
-    // SELLER 4: RSS XML FEEDS (Ledger Locked)
+    // SELLER 4: RSS XML FEEDS
     // ==============================================================
     if (!payload.source_url && (!payload.status || !payload.live_score)) {
         try {
@@ -350,21 +356,16 @@ module.exports = async function (req, res) {
     // ==============================================================
     let lowerStatus = (payload.status || "").toLowerCase();
     
-    // FIREWALL: Verify the winning team actually matches the ledger!
     let isFakeNewsResult = false;
     if (lowerStatus.includes('won by')) {
         let textIsValid = false;
-        
-        // 1. Did a specific team win?
         let t1Win = t1 !== "tbd" && t1A.some(alias => lowerStatus.includes(alias));
         let t2Win = t2 !== "tbd" && t2A.some(alias => lowerStatus.includes(alias));
-        if (t1Win || t2Win) textIsValid = true;
         
-        // 2. Is it a playoff game where the result doesn't have the team name yet?
+        if (t1Win || t2Win) textIsValid = true;
         if (currentMission.isPlayoff && !textIsValid) {
              textIsValid = currentMission.expected.some(e => lowerStatus.includes(e));
         }
-
         if (!textIsValid) isFakeNewsResult = true; 
     }
 
@@ -398,28 +399,38 @@ module.exports = async function (req, res) {
         payload.prediction = "Active Tracking...";
     }
 
-    // Countdown Timer Engine
+    // ==============================================================
+    // VERCEL NATIVE TIMEZONE COUNTDOWN ENGINE
+    // ==============================================================
     if (rawDateStr && (payload.match_state === "standby" || payload.match_state === "pre-match" || payload.match_state === "delay")) {
         try {
-            let monthStr = rawDateStr.split(' ')[0]; let dayStr = rawDateStr.split(' ')[1];
-            let timeStr = rawDateStr.match(/\((.*?)\)/)[1]; let isPM = timeStr.includes("PM");
-            let hours = parseInt(timeStr.split(':')[0]) + (isPM && timeStr.split(':')[0] !== '12' ? 12 : 0);
-            let mins = parseInt(timeStr.split(':')[1].replace(/[a-zA-Z\s]/g, ''));
-            
-            let targetDate = new Date(`2026-${monthStr}-${dayStr} ${hours}:${mins}:00`);
-            let now = new Date(); 
-            targetDate.setHours(targetDate.getHours() - 5); targetDate.setMinutes(targetDate.getMinutes() - 30); 
-
-            let diffMs = targetDate - now;
-            if (diffMs > 0 && diffMs < 86400000) { 
-                let hrs = Math.floor((diffMs % 86400000) / 3600000);
-                let m = Math.round(((diffMs % 86400000) % 3600000) / 60000);
-                payload.countdown = `T-MINUS ${hrs}h ${m}m TO OPERATION`;
-                payload.match_state = "countdown";
+            let monthStr = rawDateStr.split(' ')[0].trim(); 
+            let dayStr = parseInt(rawDateStr.split(' ')[1]).toString(); 
+            let timeMatch = rawDateStr.match(/\((.*?)\)/);
+            if (timeMatch) {
+                let timeStr = timeMatch[1]; 
+                let isPM = timeStr.toUpperCase().includes("PM");
+                let timeParts = timeStr.replace(/[a-zA-Z\s]/g, '').split(':');
+                let hours = parseInt(timeParts[0]);
+                if (isPM && hours !== 12) hours += 12;
+                if (!isPM && hours === 12) hours = 0;
+                let mins = parseInt(timeParts[1] || 0);
                 
-                payload.live_score = "Awaiting Deployment";
-                if (!payload.status || payload.status === "Intel Gathering...") payload.status = "Pre-Match Standby";
-                payload.result = null; 
+                // BUILDS THE DATE USING EXPLICIT INDIAN STANDARD TIME OFFSET
+                let targetDate = new Date(`${monthStr} ${dayStr}, 2026 ${hours}:${mins}:00 GMT+0530`);
+                let now = new Date(); 
+                let diffMs = targetDate.getTime() - now.getTime();
+                
+                if (diffMs > 0 && diffMs < 86400000) { 
+                    let hrs = Math.floor((diffMs % 86400000) / 3600000);
+                    let m = Math.floor(((diffMs % 3600000) / 60000));
+                    payload.countdown = `T-MINUS ${hrs}h ${m}m TO OPERATION`;
+                    payload.match_state = "countdown";
+                    
+                    payload.live_score = "Awaiting Deployment";
+                    if (!payload.status || payload.status === "Intel Gathering...") payload.status = "Pre-Match Standby";
+                    payload.result = null; 
+                }
             }
         } catch(e) {}
     }
