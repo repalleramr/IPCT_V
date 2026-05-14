@@ -50,15 +50,16 @@ module.exports = async function (req, res) {
         last_over: [],
         prediction: "Tracking...",
         countdown: null,
-        source: "multi-node-cascade",
-        source_url: "multiple-encrypted-nodes"
+        source: "awaiting-seller",
+        source_url: null
   };
 
   const headers = { 
-      'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36',
+      'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
       'Accept': 'application/json, text/plain, */*'
   };
 
+  // Helper: Safely merges data
   function mergeIntel(newData) {
       if (!payload.live_score && newData.live_score) payload.live_score = newData.live_score;
       if (!payload.status && newData.status) payload.status = newData.status;
@@ -75,59 +76,112 @@ module.exports = async function (req, res) {
       if (newData.source_url) payload.source_url = newData.source_url;
   }
 
+  // Helper: Checks if the current Seller gave us everything we need
+  function isIntelSufficient() {
+      let hasStatus = payload.status && payload.status.length > 3;
+      let hasVenue = payload.venue && payload.venue.length > 3;
+      return hasStatus && hasVenue;
+  }
+
   try {
     // ==============================================================
-    // CASCADE 1: ESPN JSON API 
+    // SELLER 1: ESPN JSON API
     // ==============================================================
-    try {
-        let espnData = {};
-        const espnEndpoints = [
-            'https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current?lang=en&latest=true',
-            'https://hs-consumer-api.espncricinfo.com/v1/pages/matches/recent?lang=en&latest=true'
-        ];
-        
-        let matchFound = false;
-        for (let url of espnEndpoints) {
-            let { data } = await axios.get(url, { headers, timeout: 3000 });
-            if (data && data.matches) {
-                for (let m of data.matches) {
-                    let tNames = m.teams.map(t => (t.team.longName + " " + t.team.abbreviation).toLowerCase());
-                    if (tNames.some(name => t1A.some(a => name.includes(a))) && tNames.some(name => t2A.some(a => name.includes(a)))) {
-                        espnData.status = m.statusText || m.status;
-                        if (m.tossResults && m.tossResults.text) espnData.toss = m.tossResults.text;
-                        if (m.ground && m.ground.name) espnData.venue = m.ground.name;
-                        espnData.source = "espn-internal-api";
-                        
-                        let scores = [];
-                        m.teams.forEach(t => {
-                            if (t.score) {
-                                let s = `${t.team.abbreviation} ${t.score}`;
-                                if (t.scoreInfo) s += ` (${t.scoreInfo})`;
-                                scores.push(s);
-                            }
-                        });
-                        if (scores.length > 0) espnData.live_score = scores.join(' v ');
-                        
-                        matchFound = true;
-                        break;
+    if (!isIntelSufficient()) {
+        try {
+            let espnData = {};
+            const espnEndpoints = [
+                'https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current?lang=en&latest=true',
+                'https://hs-consumer-api.espncricinfo.com/v1/pages/matches/recent?lang=en&latest=true'
+            ];
+            
+            let matchFound = false;
+            for (let url of espnEndpoints) {
+                let { data } = await axios.get(url, { headers, timeout: 3000 });
+                if (data && data.matches) {
+                    for (let m of data.matches) {
+                        let tNames = m.teams.map(t => (t.team.longName + " " + t.team.abbreviation).toLowerCase());
+                        if (tNames.some(name => t1A.some(a => name.includes(a))) && tNames.some(name => t2A.some(a => name.includes(a)))) {
+                            espnData.status = m.statusText || m.status;
+                            if (m.tossResults && m.tossResults.text) espnData.toss = m.tossResults.text;
+                            if (m.ground && m.ground.name) espnData.venue = m.ground.name;
+                            espnData.source = "seller-1-espn";
+                            
+                            let scores = [];
+                            m.teams.forEach(t => {
+                                if (t.score) {
+                                    let s = `${t.team.abbreviation} ${t.score}`;
+                                    if (t.scoreInfo) s += ` (${t.scoreInfo})`;
+                                    scores.push(s);
+                                }
+                            });
+                            if (scores.length > 0) espnData.live_score = scores.join(' v ');
+                            matchFound = true;
+                            break;
+                        }
                     }
                 }
+                if (matchFound) break;
             }
-            if (matchFound) break;
-        }
-        mergeIntel(espnData);
-    } catch(e) {}
+            mergeIntel(espnData);
+        } catch(e) {}
+    }
 
     // ==============================================================
-    // CASCADE 2: CRICBUZZ MOBILE (STRICT ISOLATED EXTRACTION)
+    // SELLER 2: CREX DIRECT HTML (If ESPN failed)
     // ==============================================================
-    if (!payload.live_score || !payload.venue || !payload.toss || !payload.status) {
+    if (!isIntelSufficient()) {
+        try {
+            let crexData = {};
+            let res = await axios.get('https://crex.com/series/indian-premier-league-2026-1PW/matches', { headers, timeout: 3500 });
+            let $cx = cheerio.load(res.data);
+            let cxMatchUrl = null;
+            
+            $cx('a').each((i, el) => {
+                let href = $cx(el).attr('href') || "";
+                let txt = ($cx(el).text() + " " + href).toLowerCase();
+                if (href.includes('cricket-live-score') || href.includes('match-details')) {
+                    if (t1A.some(a => txt.includes(a)) && t2A.some(a => txt.includes(a))) {
+                        cxMatchUrl = href.startsWith('http') ? href : 'https://crex.com' + href;
+                        return false;
+                    }
+                }
+            });
+
+            if (cxMatchUrl) {
+                crexData.source_url = cxMatchUrl;
+                crexData.source = "seller-2-crex";
+                
+                let mRes = await axios.get(cxMatchUrl, { headers, timeout: 4000 });
+                let $m = cheerio.load(mRes.data);
+                let rawText = $m('body').text().replace(/\s+/g, ' ');
+
+                let winMatch = rawText.match(/([a-zA-Z0-9\s]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
+                if (winMatch) crexData.status = winMatch[1].trim();
+
+                let venueMatch = rawText.match(/Venue\s*:\s*(.*?)(?=\s+Toss|\s+Umpires|\s+Match)/i);
+                if (venueMatch) crexData.venue = venueMatch[1].trim();
+
+                let tossMatch = rawText.match(/Toss\s*:\s*(.*?)(?=\s+Time|\s+Venue|\s+Umpires)/i);
+                if (tossMatch) crexData.toss = tossMatch[1].trim();
+
+                let scoreMatch = rawText.match(/([A-Z-]+\s*\d+\/\d+\s*\([\d\.]+\))/g);
+                if (scoreMatch && scoreMatch.length > 0) crexData.live_score = scoreMatch.join(' v ');
+
+                mergeIntel(crexData);
+            }
+        } catch (e) {}
+    }
+
+    // ==============================================================
+    // SELLER 3: CRICBUZZ MOBILE (If CREX also failed)
+    // ==============================================================
+    if (!isIntelSufficient()) {
         try {
             let cbData = {};
             const directories = [
                 'https://m.cricbuzz.com/cricket-match/live-scores',
-                'https://m.cricbuzz.com/cricket-match/live-scores/recent-matches',
-                'https://m.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches'
+                'https://m.cricbuzz.com/cricket-match/live-scores/recent-matches'
             ];
 
             let cbMatchUrl = null;
@@ -149,47 +203,26 @@ module.exports = async function (req, res) {
 
             if (cbMatchUrl) {
                 let safeUrl = cbMatchUrl.replace('/live-cricket-scores/', '/live-cricket-scorecard/').replace('/cricket-scores/', '/live-cricket-scorecard/');
-                const { data: mHtml } = await axios.get(safeUrl, { headers, timeout: 4000 });
-                const $m = cheerio.load(mHtml);
-                
-                cbData.source = "cricbuzz-strict-scraper";
+                cbData.source = "seller-3-cricbuzz";
                 cbData.source_url = safeUrl;
 
-                // 1. ISOLATED STATUS EXTRACTION (Reads Title ONLY, NEVER the whole body)
-                let pageTitle = $m('title').text() || "";
-                let titleStatus = "";
-                pageTitle.split('|')[0].split('-').forEach(part => {
-                    if (part.toLowerCase().includes('won by') || part.toLowerCase().includes('tied')) {
-                        titleStatus = part.trim();
-                    }
-                });
-                cbData.status = titleStatus || $m('.cb-text-complete, .ui-match-status, .cb-status-msg').first().text().trim();
+                const { data: mHtml } = await axios.get(safeUrl, { headers, timeout: 4000 });
+                const $m = cheerio.load(mHtml);
+                let rawBodyText = $m('body').text().replace(/\s+/g, ' ');
 
-                // 2. ISOLATED VENUE & TOSS EXTRACTION (Must start with exact word)
+                let winMatch = rawBodyText.match(/([a-zA-Z0-9\s]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
+                if (winMatch) cbData.status = winMatch[1].trim();
+                else cbData.status = $m('.cb-text-complete, .ui-match-status, .cb-status-msg').first().text().trim();
+
                 $m('div, span').each((i, el) => {
                     let text = $m(el).text().trim().replace(/\s+/g, ' ');
-                    if (!cbData.venue && text.startsWith('Venue:')) {
-                        cbData.venue = text.split('Venue:')[1].split(/•|Date &|{/)[0].trim();
-                    }
-                    if (!cbData.toss && text.startsWith('Toss:')) {
-                        cbData.toss = text.split('Toss:')[1].trim();
-                    }
-                    if (!cbData.target && text.startsWith('Target:')) {
-                        cbData.target = text.split('Target:')[1].trim();
-                    }
+                    if (!cbData.venue && text.startsWith('Venue:')) cbData.venue = text.split('Venue:')[1].split(/•|Date &|{/)[0].trim();
+                    if (!cbData.toss && text.startsWith('Toss:')) cbData.toss = text.split('Toss:')[1].trim();
                 });
 
-                // 3. ISOLATED SCORE EXTRACTION
-                if (!payload.live_score) {
-                    let teamScores = [];
-                    $m('.ui-bat-team-scores, .cb-min-bat-rw').each((i, el) => teamScores.push($m(el).text().trim()));
-                    if (teamScores.length > 0) {
-                        cbData.live_score = teamScores.join(' v ');
-                    } else {
-                        let ts = pageTitle.split(',')[0].split('|')[0].trim();
-                        if (ts.match(/\d+\/\d+/)) cbData.live_score = ts;
-                    }
-                }
+                let teamScores = [];
+                $m('.ui-bat-team-scores, .cb-min-bat-rw').each((i, el) => teamScores.push($m(el).text().trim()));
+                if (teamScores.length > 0) cbData.live_score = teamScores.join(' v ');
 
                 mergeIntel(cbData);
             }
@@ -197,9 +230,9 @@ module.exports = async function (req, res) {
     }
 
     // ==============================================================
-    // CASCADE 3: RSS XML FEEDS 
+    // SELLER 4: RSS XML FEEDS (Last Resort)
     // ==============================================================
-    if (!payload.status || !payload.live_score) {
+    if (!payload.status) {
         try {
             let xmlData = {};
             const { data: xmlBody } = await axios.get('https://www.espncricinfo.com/rss/livescores.xml', { timeout: 3000 });
@@ -207,12 +240,8 @@ module.exports = async function (req, res) {
             $x('item').each((i, el) => {
                 const title = $x(el).find('title').text().toLowerCase();
                 if (t1A.some(a => title.includes(a)) && t2A.some(a => title.includes(a))) {
-                    if (!payload.status) xmlData.status = $x(el).find('description').text().trim();
-                    if (!payload.live_score) {
-                        let scoreMatch = $x(el).find('title').text().split(' vs ')[0].trim();
-                        if (scoreMatch.match(/\d+\/\d+/)) xmlData.live_score = scoreMatch;
-                    }
-                    xmlData.source = "xml-failsafe";
+                    xmlData.status = $x(el).find('description').text().trim();
+                    xmlData.source = "seller-4-xml";
                     return false; 
                 }
             });
@@ -245,7 +274,7 @@ module.exports = async function (req, res) {
         payload.prediction = "Active Tracking...";
     }
 
-    // Countdown Timer Engine
+    // Countdown Timer
     if (rawDateStr && (payload.match_state === "standby" || payload.match_state === "pre-match" || payload.match_state === "delay")) {
         try {
             let monthStr = rawDateStr.split(' ')[0]; let dayStr = rawDateStr.split(' ')[1];
@@ -267,7 +296,7 @@ module.exports = async function (req, res) {
         } catch(e) {}
     }
 
-    // Post-Cascade Fallbacks 
+    // Fallbacks 
     if (!payload.live_score) payload.live_score = "Intel Unavailable";
     if (!payload.venue) payload.venue = "Location Secure";
     if (!payload.toss) payload.toss = "Awaiting Coin Drop";
