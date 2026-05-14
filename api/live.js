@@ -406,13 +406,15 @@ module.exports = async function (req, res) {
             }
         } catch(e) {}
     }
-
-    // ==============================================================
+// ==============================================================
     // ABSOLUTE VENUE ENGINE
     // Priority: Scraped Venue > Master Ledger Venue
+    // Fix: past/completed matches should always use master ledger venue
     // ==============================================================
-    if (!payload.venue || payload.venue === "Location Secure") {
-        payload.venue = currentMission.venue;
+    if (payload.match_state === "completed" || payload.match_state === "abandoned") {
+      payload.venue = currentMission.venue;
+    } else if (!payload.venue || payload.venue === "Location Secure") {
+      payload.venue = currentMission.venue;
     }
 
     // Post-Cascade Fallbacks 
