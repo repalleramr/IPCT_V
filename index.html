@@ -5,34 +5,39 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>IPCT Uplink Mirror</title>
     <style>
+        * {
+            box-sizing: border-box;
+        }
         body {
             margin: 0;
-            padding: 0;
+            padding: 20px;
             background: #000;
             color: #00ffcc;
             font-family: monospace;
             display: flex;
             justify-content: center;
-            align-items: center;
+            align-items: flex-start; /* FIX: Allows scrolling on mobile */
             min-height: 100vh;
         }
         .container {
-            width: 90%;
+            width: 100%;
             max-width: 700px;
             background: #111;
             border: 1px solid #222;
             border-radius: 12px;
-            padding: 30px;
+            padding: 25px;
             box-shadow: 0 0 25px rgba(0,255,204,0.15);
+            margin: auto 0; /* Centers vertically only if there is room */
         }
         h1 {
             margin-top: 0;
             color: #00ffcc;
-            font-size: 1.7rem;
+            font-size: 1.5rem;
         }
         p {
             color: #bbb;
-            line-height: 1.7;
+            line-height: 1.6;
+            font-size: 0.95rem;
         }
         .status {
             margin-top: 20px;
@@ -42,6 +47,7 @@
             border-radius: 8px;
             color: #00ffcc;
             font-weight: bold;
+            font-size: 0.9rem;
         }
         .link-box {
             margin-top: 25px;
@@ -55,18 +61,20 @@
             margin-top: 15px;
             margin-bottom: 5px;
             text-transform: uppercase;
+            font-size: 0.85rem;
         }
         a {
             display: block;
             color: #fff;
             background: #1b1e2b;
-            padding: 14px 22px;
+            padding: 14px 15px;
             text-decoration: none;
             border-radius: 8px;
             border: 1px solid #8a2be2;
             font-weight: bold;
             transition: 0.3s;
             text-align: center;
+            font-size: 0.9rem;
         }
         a:hover {
             background: #8a2be2;
@@ -75,7 +83,7 @@
         .footer {
             margin-top: 30px;
             color: #555;
-            font-size: 0.85rem;
+            font-size: 0.8rem;
             text-align: center;
         }
     </style>
@@ -83,7 +91,7 @@
 <body>
 
     <div class="container">
-        <h1>📡 IPCT SATELLITE UPLINK ACTIVE</h1>
+        <h1>📡 IPCT SATELLITE UPLINK</h1>
         <p>
             Real-time IPL telemetry engine is online.
             <br><br>
@@ -102,4 +110,24 @@
             </a>
 
             <div class="link-title">Countdown Probe (Today)</div>
-            <a href="/api/live?teams=Punjab%20
+            <a href="/api/live?teams=Punjab%20Kings%20vs%20Mumbai%20Indians&time=May%2014%20(7:30%20PM)" style="border-color:#00ffcc;">
+                TEST: May 14 (PBKS vs MI)
+            </a>
+
+            <div class="link-title">Standby Probe (Future)</div>
+            <a href="/api/live?teams=Lucknow%20Super%20Giants%20vs%20Chennai%20Super%20Kings&time=May%2015%20(7:30%20PM)">
+                TEST: May 15 (LSG vs CSK)
+            </a>
+            
+            <a href="/api/live?teams=Kolkata%20Knight%20Riders%20vs%20Gujarat%20Titans&time=May%2016%20(7:30%20PM)">
+                TEST: May 16 (KKR vs GT)
+            </a>
+        </div>
+
+        <div class="footer">
+            IPCT Multi-Node Aggregator v3.0
+        </div>
+    </div>
+
+</body>
+</html>
