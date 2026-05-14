@@ -13,9 +13,6 @@ module.exports = async function (req, res) {
 
   if (!targetTeams) return res.status(200).json({ success: false, error: "Awaiting Target Intel..." });
 
-  // DATE TARGET LOCK: Extracts "may 14" from "May 14 (7:30 PM)" to prevent duplicate match errors
-  let dateTarget = rawDateStr ? rawDateStr.split('(')[0].trim().toLowerCase() : "";
-
   const teamAliases = {
     "chennai": ["csk", "chennai", "super kings"],
     "delhi": ["dc", "delhi", "capitals"],
@@ -33,6 +30,8 @@ module.exports = async function (req, res) {
   let t2 = targetTeams.split(' vs ')[1]?.trim().split(' ')[0] || "";
   const t1A = teamAliases[t1] || [t1];
   const t2A = teamAliases[t2] || [t2];
+
+  let dateTarget = rawDateStr ? rawDateStr.split('(')[0].trim().toLowerCase() : "";
 
   let payload = {
         title: "IPL LIVE INTEL",
@@ -85,6 +84,14 @@ module.exports = async function (req, res) {
       return hasStatus && hasVenue && hasToss;
   }
 
+  // BUG FIX: Faction Verification Engine
+  function isValidResult(text) {
+      if (!text) return false;
+      let lower = text.toLowerCase();
+      // Only accept the result if it actually mentions one of our two target teams
+      return t1A.some(a => lower.includes(a)) || t2A.some(a => lower.includes(a));
+  }
+
   try {
     // ==============================================================
     // SELLER 1: ESPN JSON API
@@ -130,7 +137,7 @@ module.exports = async function (req, res) {
     }
 
     // ==============================================================
-    // SELLER 2: CREX DIRECT HTML (With Date Target Lock)
+    // SELLER 2: CREX DIRECT HTML
     // ==============================================================
     if (!isIntelSufficient()) {
         try {
@@ -151,7 +158,7 @@ module.exports = async function (req, res) {
                     if (t1A.some(a => fullTxt.includes(a)) && t2A.some(a => fullTxt.includes(a))) {
                         let fullUrl = href.startsWith('http') ? href : 'https://crex.com' + href;
                         if (dateTarget && fullTxt.includes(dateTarget)) bestCxUrl = fullUrl;
-                        else backupCxUrl = fullUrl; // Saves the old match just in case
+                        else backupCxUrl = fullUrl; 
                     }
                 }
             });
@@ -166,9 +173,11 @@ module.exports = async function (req, res) {
                 let $m = cheerio.load(mRes.data);
                 let rawText = $m('body').text().replace(/\s+/g, ' ');
 
-                // BUG FIX: Stripped numbers out of team name regex
-                let winMatch = rawText.match(/([a-zA-Z\s]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
-                if (winMatch) crexData.status = winMatch[1].trim();
+                let winMatch = rawText.match(/(?:[0-9]+)?([a-zA-Z\s\-]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
+                // Strict Verification
+                if (winMatch && isValidResult(winMatch[1])) {
+                    crexData.status = winMatch[1].trim();
+                }
 
                 let venueMatch = rawText.match(/Venue\s*:\s*(.*?)(?=\s+Toss|\s+Umpires|\s+Match)/i);
                 if (venueMatch) crexData.venue = venueMatch[1].trim();
@@ -185,7 +194,7 @@ module.exports = async function (req, res) {
     }
 
     // ==============================================================
-    // SELLER 3: CRICBUZZ MOBILE (With Date Target Lock)
+    // SELLER 3: CRICBUZZ MOBILE 
     // ==============================================================
     if (!isIntelSufficient()) {
         try {
@@ -245,7 +254,8 @@ module.exports = async function (req, res) {
                             cbData.toss = text.split(/Toss\s*:/i)[1].split(/•|Date|Time|{/)[0].trim();
                         }
                         if (!cbData.status && text.match(/^Result\s*:/i)) {
-                            cbData.status = text.split(/Result\s*:/i)[1].trim();
+                            let possibleStatus = text.split(/Result\s*:/i)[1].trim();
+                            if (isValidResult(possibleStatus)) cbData.status = possibleStatus;
                         }
                     });
                 }
@@ -254,11 +264,17 @@ module.exports = async function (req, res) {
                     const $m = cheerio.load(scRes.value.data);
                     let rawBodyText = $m('body').text().replace(/\s+/g, ' ');
 
-                    // BUG FIX: Strict regex excludes numbers
                     if (!cbData.status) {
                         let winMatch = rawBodyText.match(/([a-zA-Z\s]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
-                        if (winMatch) cbData.status = winMatch[1].trim();
-                        else cbData.status = $m('.cb-text-complete, .ui-match-status, .cb-status-msg').first().text().trim();
+                        // Strict Verification
+                        if (winMatch && isValidResult(winMatch[1])) {
+                            cbData.status = winMatch[1].trim();
+                        } else {
+                            let fallbackStatus = $m('.cb-text-complete, .ui-match-status, .cb-status-msg').first().text().trim();
+                            if (isValidResult(fallbackStatus) || !fallbackStatus.toLowerCase().includes('won')) {
+                                cbData.status = fallbackStatus;
+                            }
+                        }
                     }
 
                     let teamScores = [];
@@ -299,7 +315,9 @@ module.exports = async function (req, res) {
     // MATCH STATE ENGINE 
     // ==============================================================
     let lowerStatus = (payload.status || "").toLowerCase();
-    let isCompleted = lowerStatus.includes('won by') || lowerStatus.includes('result') || lowerStatus.includes('tied');
+    
+    // Only flag as completed if the status string specifically mentions one of the two factions winning
+    let isCompleted = (lowerStatus.includes('won by') || lowerStatus.includes('result') || lowerStatus.includes('tied')) && isValidResult(payload.status);
 
     if (lowerStatus.includes('abandoned')) {
         payload.match_state = "abandoned"; payload.title = "MISSION ABORTED";
