@@ -151,7 +151,19 @@ module.exports = async function (req, res) {
                         let tNames = m.teams.map(t => (t.team.longName + " " + t.team.abbreviation).toLowerCase());
                         let fullTxt = tNames.join(" ") + " " + (m.title || "").toLowerCase();
 
-                        if (matchesTeams(fullTxt)) {
+                        if (
+                            matchesTeams(fullTxt) &&
+                            (
+                                !currentMission.id ||
+                                fullTxt.includes(currentMission.id) ||
+                                (
+                                    targetMonth &&
+                                    targetDay &&
+                                    fullTxt.includes(targetMonth) &&
+                                    fullTxt.includes(targetDay)
+                                )
+                            )
+                        ) {
                             espnData.status = m.statusText || m.status;
                             if (m.tossResults && m.tossResults.text) espnData.toss = m.tossResults.text;
                             if (m.ground && m.ground.name) espnData.venue = m.ground.name; // Dynamic Venue
@@ -196,7 +208,19 @@ module.exports = async function (req, res) {
                 let fullTxt = txt + " " + parentTxt;
 
                 if (href.includes('cricket-live-score') || href.includes('match-details')) {
-                    if (matchesTeams(fullTxt)) {
+                    if (
+                        matchesTeams(fullTxt) &&
+                        (
+                            !currentMission.id ||
+                            fullTxt.includes(currentMission.id) ||
+                            (
+                                targetMonth &&
+                                targetDay &&
+                                fullTxt.includes(targetMonth) &&
+                                fullTxt.includes(targetDay)
+                            )
+                        )
+                    ) {
                         let fullUrl = href.startsWith('http') ? href : 'https://crex.com' + href;
                         if (currentMission.id && fullTxt.includes(currentMission.id)) bestCxUrl = fullUrl;
                         else if (!bestCxUrl) backupCxUrl = fullUrl; 
@@ -215,7 +239,7 @@ module.exports = async function (req, res) {
                 
                 let pageTitle = $m('title').text() || "";
                 let titleWin = pageTitle.match(/([a-zA-Z\s\-]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
-
+                
                 if (titleWin) crexData.status = titleWin[1].trim();
                 else crexData.status = $m('.match-info-status, .status, .match-status').first().text().trim();
 
@@ -255,7 +279,19 @@ module.exports = async function (req, res) {
                     const fullTxt = txt + " " + parentTxt;
 
                     if (href.includes('/live-cricket-scores/') || href.includes('/cricket-scores/')) {
-                        if (matchesTeams(fullTxt)) {
+                        if (
+                            matchesTeams(fullTxt) &&
+                            (
+                                !currentMission.id ||
+                                fullTxt.includes(currentMission.id) ||
+                                (
+                                    targetMonth &&
+                                    targetDay &&
+                                    fullTxt.includes(targetMonth) &&
+                                    fullTxt.includes(targetDay)
+                                )
+                            )
+                        ) {
                             let fullUrl = href.startsWith('http') ? href : 'https://m.cricbuzz.com' + href;
                             if (currentMission.id && fullTxt.includes(currentMission.id)) bestCbUrl = fullUrl;
                             else if (!bestCbUrl) backupCbUrl = fullUrl; 
