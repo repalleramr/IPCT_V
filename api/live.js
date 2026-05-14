@@ -107,6 +107,7 @@ module.exports = async function (req, res) {
       if (payload.last_over.length === 0 && newData.last_over && newData.last_over.length > 0) payload.last_over = newData.last_over;
       if (newData.source) payload.source = newData.source;
       if (newData.source_url) payload.source_url = newData.source_url;
+      if (newData.match_state) payload.match_state = newData.match_state; // Explicit State Passing
   }
 
   function isIntelSufficient() {
@@ -160,6 +161,11 @@ module.exports = async function (req, res) {
                             espnData.source = "seller-1-espn";
                             espnData.source_url = `https://www.espncricinfo.com/series/${m.series.objectId}/match/${m.objectId}/live-cricket-score`;
                             
+                            // EXPLICIT STATE FIX
+                            if (m.state === "POST") espnData.match_state = "completed";
+                            else if (m.state === "LIVE") espnData.match_state = "live";
+                            else if (m.state === "PRE") espnData.match_state = "pre-match";
+
                             let scores = [];
                             m.teams.forEach(t => {
                                 if (t.score) {
@@ -215,25 +221,22 @@ module.exports = async function (req, res) {
                 let mRes = await axios.get(cxMatchUrl, { headers, timeout: 4000 });
                 let $m = cheerio.load(mRes.data);
                 
-                // Top-Body Scanner: Reads only first 1500 chars to avoid footers!
-                let topBody = $m('body').text().replace(/\s+/g, ' ').substring(0, 1500);
-                let bodyWin = topBody.match(/(?:[0-9]+)?([a-zA-Z\s\-]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
-                
+                // EXPLICIT TITLE PARSING ONLY (NO BODY TEXT)
                 let pageTitle = $m('title').text() || "";
                 let titleWin = pageTitle.match(/([a-zA-Z\s\-]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
                 
-                if (bodyWin) crexData.status = bodyWin[1].trim();
-                else if (titleWin) crexData.status = titleWin[1].trim();
-                else crexData.status = $m('.match-info-status, .status, .match-status').first().text().trim();
+                if (titleWin) {
+                    crexData.status = titleWin[1].trim();
+                    crexData.match_state = "completed";
+                } else {
+                    crexData.status = $m('.match-info-status, .status, .match-status').first().text().trim();
+                }
 
-                $m('div, span, p').each((i, el) => {
+                $m('div, span').each((i, el) => {
                     let text = $m(el).text().trim().replace(/\s+/g, ' ');
-                    if (!crexData.venue && text.includes('Venue:')) crexData.venue = text.split('Venue:')[1].split(/(?:•|Date|Time|{)/)[0].trim();
-                    if (!crexData.toss && text.includes('Toss:')) crexData.toss = text.split('Toss:')[1].split(/(?:•|Date|Time|Venue|{)/)[0].trim();
+                    if (!crexData.venue && text.startsWith('Venue:')) crexData.venue = text.split('Venue:')[1].split(/(?=Toss|Umpires|Match)/)[0].trim();
+                    if (!crexData.toss && text.startsWith('Toss:')) crexData.toss = text.split('Toss:')[1].split(/(?=Time|Venue|Umpires)/)[0].trim();
                 });
-
-                let scoreMatch = topBody.match(/([A-Z-]+\s*\d+\/\d+\s*\([\d\.]+\))/g);
-                if (scoreMatch && scoreMatch.length > 0) crexData.live_score = scoreMatch.join(' v ');
 
                 mergeIntel(crexData);
             }
@@ -281,7 +284,7 @@ module.exports = async function (req, res) {
                 let scorecardUrl = cbMatchUrl.replace('/live-cricket-scores/', '/live-cricket-scorecard/').replace('/cricket-scores/', '/live-cricket-scorecard/');
                 let factsUrl = cbMatchUrl.replace('/live-cricket-scores/', '/cricket-match-facts/').replace('/cricket-scores/', '/cricket-match-facts/');
                 
-                cbData.source = "seller-3-cricbuzz-ledger";
+                cbData.source = "seller-3-cricbuzz";
                 cbData.source_url = scorecardUrl;
 
                 const [scRes, factsRes] = await Promise.allSettled([
@@ -289,38 +292,35 @@ module.exports = async function (req, res) {
                     axios.get(factsUrl, { headers, timeout: 4000 })
                 ]);
 
-                // Reliable Venue & Toss Extraction
-                const extractMatchData = (html) => {
-                    const $p = cheerio.load(html);
-                    $p('div, span, p').each((i, el) => {
-                        let text = $p(el).text().trim().replace(/\s+/g, ' ');
-                        if (!cbData.venue && text.includes('Venue:')) cbData.venue = text.split('Venue:')[1].split(/(?:•|Date|Time|{)/)[0].trim();
-                        if (!cbData.toss && text.includes('Toss:')) cbData.toss = text.split('Toss:')[1].split(/(?:•|Date|Time|Venue|{)/)[0].trim();
-                        if (!cbData.status && text.includes('Result:')) cbData.status = text.split('Result:')[1].split(/(?:•|Date|Time|{)/)[0].trim();
+                if (factsRes.status === 'fulfilled') {
+                    const $f = cheerio.load(factsRes.value.data);
+                    $f('div, span').each((i, el) => {
+                        let text = $f(el).text().trim().replace(/\s+/g, ' ');
+                        if (!cbData.venue && text.match(/^Venue\s*:/i)) cbData.venue = text.split(/Venue\s*:/i)[1].split(/•|Date|{/)[0].trim();
+                        if (!cbData.toss && text.match(/^Toss\s*:/i)) cbData.toss = text.split(/Toss\s*:/i)[1].split(/•|Date|Time|{/)[0].trim();
                     });
-                };
+                }
 
-                if (factsRes.status === 'fulfilled') extractMatchData(factsRes.value.data);
-                if (scRes.status === 'fulfilled') extractMatchData(scRes.value.data);
-
-                // Top-Body Scanner for Status
                 if (scRes.status === 'fulfilled') {
                     const $m = cheerio.load(scRes.value.data);
                     
-                    if (!cbData.status) {
-                        let topBody = $m('body').text().replace(/\s+/g, ' ').substring(0, 1500);
-                        let bodyWin = topBody.match(/(?:[0-9]+)?([a-zA-Z\s]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
-                        if (bodyWin) cbData.status = bodyWin[1].trim();
-                        else {
-                            let pageTitle = $m('title').text() || "";
-                            let titleStatus = "";
-                            pageTitle.split('|')[0].split('-').forEach(part => {
-                                if (part.toLowerCase().includes('won by') || part.toLowerCase().includes('tied')) {
-                                    titleStatus = part.replace(/^[0-9]+/, '').trim();
-                                }
-                            });
-                            cbData.status = titleStatus || $m('.cb-text-complete, .ui-match-status, .cb-status-msg').first().text().trim();
+                    // EXPLICIT TITLE PARSING ONLY
+                    let pageTitle = $m('title').text() || "";
+                    let titleStatus = "";
+                    pageTitle.split('|')[0].split('-').forEach(part => {
+                        if (part.toLowerCase().includes('won by') || part.toLowerCase().includes('tied')) {
+                            titleStatus = part.replace(/^[0-9]+/, '').trim();
                         }
+                    });
+                    
+                    if (titleStatus) {
+                        cbData.status = titleStatus;
+                        cbData.match_state = "completed"; // Forced state!
+                    } else if ($m('.cb-text-complete').length > 0) {
+                        cbData.status = $m('.cb-text-complete').first().text().trim();
+                        cbData.match_state = "completed"; // Forced state!
+                    } else {
+                        cbData.status = $m('.ui-match-status, .cb-status-msg').first().text().trim();
                     }
 
                     let teamScores = [];
@@ -359,55 +359,51 @@ module.exports = async function (req, res) {
     }
 
     // ==============================================================
-    // FINAL FIREWALL & MATCH STATE ENGINE 
+    // FINAL MATCH STATE ENGINE
     // ==============================================================
     let lowerStatus = (payload.status || "").toLowerCase();
-    
-    let isFakeNewsResult = false;
-    if (lowerStatus.includes('won by')) {
-        let textIsValid = false;
-        let t1Win = t1 !== "tbd" && t1A.some(alias => lowerStatus.includes(alias));
-        let t2Win = t2 !== "tbd" && t2A.some(alias => lowerStatus.includes(alias));
-        
-        if (t1Win || t2Win) textIsValid = true;
-        if (currentMission.isPlayoff && !textIsValid) {
-             textIsValid = currentMission.expected.some(e => lowerStatus.includes(e));
-        }
-        if (!textIsValid) isFakeNewsResult = true; 
-    }
 
-    if (isFakeNewsResult) {
-        payload.status = "Pre-Match Standby";
-        lowerStatus = "pre-match standby";
-    }
-
+    // Clean rogue numbers
     if (payload.status && payload.status.match(/^[0-9]+/)) {
         payload.status = payload.status.replace(/^[0-9]+/, '').trim();
+        lowerStatus = payload.status.toLowerCase();
     }
 
-    let isCompleted = lowerStatus.includes('won by') || lowerStatus.includes('result') || lowerStatus.includes('tied');
+    // We only evaluate 'isCompleted' if the explicit state wasn't already passed by a Seller
+    if (payload.match_state === "standby") {
+        let isCompleted = lowerStatus.includes('won by') || lowerStatus.includes('tied');
 
-    if (lowerStatus.includes('abandoned')) {
-        payload.match_state = "abandoned"; payload.title = "MISSION ABORTED";
-    } else if (lowerStatus.includes('delay') || lowerStatus.includes('rain') || lowerStatus.includes('stumps')) {
-        payload.match_state = "delay"; payload.title = "WEATHER PROTOCOL";
-    } else if (isCompleted) {
-        payload.match_state = "completed"; 
+        if (lowerStatus.includes('abandoned')) {
+            payload.match_state = "abandoned"; 
+        } else if (lowerStatus.includes('delay') || lowerStatus.includes('rain') || lowerStatus.includes('stumps')) {
+            payload.match_state = "delay"; 
+        } else if (isCompleted) {
+            payload.match_state = "completed"; 
+        } else if (lowerStatus.includes('toss')) {
+            payload.match_state = "pre-match"; 
+            if (!payload.toss) payload.toss = payload.status;
+        } else if (payload.live_score && payload.live_score.match(/\d+/)) {
+            payload.match_state = "live";
+            payload.prediction = "Active Tracking...";
+        }
+    }
+
+    // Final Polish based on exact state
+    if (payload.match_state === "completed") {
         payload.title = "MISSION ACCOMPLISHED";
         payload.result = payload.status; 
         payload.live_score = "Match Ended"; 
         payload.last_over = ["E", "N", "D"];
-        payload.striker = null; payload.bowler = "Mission Concluded";
-    } else if (lowerStatus.includes('toss')) {
-        payload.match_state = "pre-match"; 
-        if (!payload.toss) payload.toss = payload.status;
-    } else if (payload.live_score && payload.live_score.match(/\d+/)) {
-        payload.match_state = "live";
-        payload.prediction = "Active Tracking...";
+        payload.striker = null; 
+        payload.bowler = "Mission Concluded";
+    } else if (payload.match_state === "abandoned") {
+        payload.title = "MISSION ABORTED";
+    } else if (payload.match_state === "delay") {
+        payload.title = "WEATHER PROTOCOL";
     }
 
     // ==============================================================
-    // VERCEL NATIVE TIMEZONE COUNTDOWN ENGINE (UPGRADED TO 48 HOURS)
+    // VERCEL NATIVE TIMEZONE COUNTDOWN ENGINE (48 HOURS)
     // ==============================================================
     if (rawDateStr && (payload.match_state === "standby" || payload.match_state === "pre-match" || payload.match_state === "delay")) {
         try {
@@ -427,7 +423,6 @@ module.exports = async function (req, res) {
                 let now = new Date(); 
                 let diffMs = targetDate.getTime() - now.getTime();
                 
-                // Timer now triggers if match is within 48 hours (172,800,000 ms)
                 if (diffMs > 0 && diffMs < 172800000) { 
                     let hrs = Math.floor(diffMs / 3600000);
                     let m = Math.floor(((diffMs % 3600000) / 60000));
@@ -444,7 +439,7 @@ module.exports = async function (req, res) {
         } catch(e) {}
     }
 
-    // Post-Cascade Fallbacks 
+    // Fallbacks 
     if (!payload.live_score) payload.live_score = "Intel Unavailable";
     if (!payload.venue) payload.venue = "Location Secure";
     if (!payload.toss) payload.toss = "Awaiting Coin Drop";
