@@ -13,6 +13,8 @@ module.exports = async function (req, res) {
 
   if (!targetTeams) return res.status(200).json({ success: false, error: "Awaiting Target Intel..." });
 
+  let dateTarget = rawDateStr ? rawDateStr.split('(')[0].trim().toLowerCase() : "";
+
   const teamAliases = {
     "chennai": ["csk", "chennai", "super kings"],
     "delhi": ["dc", "delhi", "capitals"],
@@ -28,10 +30,10 @@ module.exports = async function (req, res) {
 
   let t1 = targetTeams.split(' vs ')[0]?.trim().split(' ')[0] || "";
   let t2 = targetTeams.split(' vs ')[1]?.trim().split(' ')[0] || "";
-  const t1A = teamAliases[t1] || [t1];
-  const t2A = teamAliases[t2] || [t2];
-
-  let dateTarget = rawDateStr ? rawDateStr.split('(')[0].trim().toLowerCase() : "";
+  
+  // BUG FIX: Ensure the raw split names ("royal", "kolkata") are always included in the search array!
+  const t1A = [...(teamAliases[t1] || []), t1];
+  const t2A = [...(teamAliases[t2] || []), t2];
 
   let payload = {
         title: "IPL LIVE INTEL",
@@ -57,7 +59,7 @@ module.exports = async function (req, res) {
   };
 
   const headers = { 
-      'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+      'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36',
       'Accept': 'application/json, text/plain, */*'
   };
 
@@ -82,14 +84,6 @@ module.exports = async function (req, res) {
       let hasVenue = payload.venue && payload.venue.length > 3;
       let hasToss = payload.toss && payload.toss.length > 3;
       return hasStatus && hasVenue && hasToss;
-  }
-
-  // BUG FIX: Faction Verification Engine
-  function isValidResult(text) {
-      if (!text) return false;
-      let lower = text.toLowerCase();
-      // Only accept the result if it actually mentions one of our two target teams
-      return t1A.some(a => lower.includes(a)) || t2A.some(a => lower.includes(a));
   }
 
   try {
@@ -150,14 +144,13 @@ module.exports = async function (req, res) {
             
             $cx('a').each((i, el) => {
                 let href = $cx(el).attr('href') || "";
-                let txt = ($cx(el).text() + " " + href).toLowerCase();
-                let parentTxt = $cx(el).parent().parent().text().toLowerCase();
-                let fullTxt = txt + " " + parentTxt;
+                let txt = ($cx(el).text() + " " + href).toLowerCase(); // STRICT: Only reads the link text itself
 
                 if (href.includes('cricket-live-score') || href.includes('match-details')) {
-                    if (t1A.some(a => fullTxt.includes(a)) && t2A.some(a => fullTxt.includes(a))) {
+                    if (t1A.some(a => txt.includes(a)) && t2A.some(a => txt.includes(a))) {
                         let fullUrl = href.startsWith('http') ? href : 'https://crex.com' + href;
-                        if (dateTarget && fullTxt.includes(dateTarget)) bestCxUrl = fullUrl;
+                        let parentTxt = $cx(el).parent().parent().text().toLowerCase();
+                        if (dateTarget && (txt.includes(dateTarget) || parentTxt.includes(dateTarget))) bestCxUrl = fullUrl;
                         else backupCxUrl = fullUrl; 
                     }
                 }
@@ -174,10 +167,7 @@ module.exports = async function (req, res) {
                 let rawText = $m('body').text().replace(/\s+/g, ' ');
 
                 let winMatch = rawText.match(/(?:[0-9]+)?([a-zA-Z\s\-]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
-                // Strict Verification
-                if (winMatch && isValidResult(winMatch[1])) {
-                    crexData.status = winMatch[1].trim();
-                }
+                if (winMatch) crexData.status = winMatch[1].trim();
 
                 let venueMatch = rawText.match(/Venue\s*:\s*(.*?)(?=\s+Toss|\s+Umpires|\s+Match)/i);
                 if (venueMatch) crexData.venue = venueMatch[1].trim();
@@ -214,14 +204,13 @@ module.exports = async function (req, res) {
                 
                 $d('a').each((i, el) => {
                     const href = $d(el).attr('href') || "";
-                    const txt = $d(el).text().toLowerCase();
-                    const parentTxt = $d(el).parent().parent().text().toLowerCase();
-                    const fullTxt = txt + " " + parentTxt;
+                    const txt = ($d(el).text() + " " + href).toLowerCase(); // STRICT ISOLATION
 
                     if (href.includes('/live-cricket-scores/') || href.includes('/cricket-scores/')) {
-                        if (t1A.some(a => fullTxt.includes(a)) && t2A.some(a => fullTxt.includes(a))) {
+                        if (t1A.some(a => txt.includes(a)) && t2A.some(a => txt.includes(a))) {
                             let fullUrl = href.startsWith('http') ? href : 'https://m.cricbuzz.com' + href;
-                            if (dateTarget && fullTxt.includes(dateTarget)) bestCbUrl = fullUrl;
+                            let parentTxt = $d(el).parent().parent().text().toLowerCase();
+                            if (dateTarget && (txt.includes(dateTarget) || parentTxt.includes(dateTarget))) bestCbUrl = fullUrl;
                             else backupCbUrl = fullUrl; 
                         }
                     }
@@ -254,8 +243,7 @@ module.exports = async function (req, res) {
                             cbData.toss = text.split(/Toss\s*:/i)[1].split(/•|Date|Time|{/)[0].trim();
                         }
                         if (!cbData.status && text.match(/^Result\s*:/i)) {
-                            let possibleStatus = text.split(/Result\s*:/i)[1].trim();
-                            if (isValidResult(possibleStatus)) cbData.status = possibleStatus;
+                            cbData.status = text.split(/Result\s*:/i)[1].trim();
                         }
                     });
                 }
@@ -265,16 +253,9 @@ module.exports = async function (req, res) {
                     let rawBodyText = $m('body').text().replace(/\s+/g, ' ');
 
                     if (!cbData.status) {
-                        let winMatch = rawBodyText.match(/([a-zA-Z\s]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
-                        // Strict Verification
-                        if (winMatch && isValidResult(winMatch[1])) {
-                            cbData.status = winMatch[1].trim();
-                        } else {
-                            let fallbackStatus = $m('.cb-text-complete, .ui-match-status, .cb-status-msg').first().text().trim();
-                            if (isValidResult(fallbackStatus) || !fallbackStatus.toLowerCase().includes('won')) {
-                                cbData.status = fallbackStatus;
-                            }
-                        }
+                        let winMatch = rawBodyText.match(/(?:[0-9]+)?([a-zA-Z\s]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
+                        if (winMatch) cbData.status = winMatch[1].trim();
+                        else cbData.status = $m('.cb-text-complete, .ui-match-status, .cb-status-msg').first().text().trim();
                     }
 
                     let teamScores = [];
@@ -315,9 +296,7 @@ module.exports = async function (req, res) {
     // MATCH STATE ENGINE 
     // ==============================================================
     let lowerStatus = (payload.status || "").toLowerCase();
-    
-    // Only flag as completed if the status string specifically mentions one of the two factions winning
-    let isCompleted = (lowerStatus.includes('won by') || lowerStatus.includes('result') || lowerStatus.includes('tied')) && isValidResult(payload.status);
+    let isCompleted = lowerStatus.includes('won by') || lowerStatus.includes('result') || lowerStatus.includes('tied');
 
     if (lowerStatus.includes('abandoned')) {
         payload.match_state = "abandoned"; payload.title = "MISSION ABORTED";
