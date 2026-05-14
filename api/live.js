@@ -30,8 +30,6 @@ module.exports = async function (req, res) {
 
   let t1 = targetTeams.split(' vs ')[0]?.trim().split(' ')[0] || "";
   let t2 = targetTeams.split(' vs ')[1]?.trim().split(' ')[0] || "";
-  
-  // BUG FIX: Ensure the raw split names ("royal", "kolkata") are always included in the search array!
   const t1A = [...(teamAliases[t1] || []), t1];
   const t2A = [...(teamAliases[t2] || []), t2];
 
@@ -103,7 +101,12 @@ module.exports = async function (req, res) {
                 let { data } = await axios.get(url, { headers, timeout: 3000 });
                 if (data && data.matches) {
                     for (let m of data.matches) {
+                        let matchStr = JSON.stringify(m).toLowerCase();
                         let tNames = m.teams.map(t => (t.team.longName + " " + t.team.abbreviation).toLowerCase());
+                        
+                        // Strict Date Lock for ESPN
+                        if (dateTarget && !matchStr.includes(dateTarget)) continue; 
+
                         if (tNames.some(name => t1A.some(a => name.includes(a))) && tNames.some(name => t2A.some(a => name.includes(a)))) {
                             espnData.status = m.statusText || m.status;
                             if (m.tossResults && m.tossResults.text) espnData.toss = m.tossResults.text;
@@ -144,7 +147,7 @@ module.exports = async function (req, res) {
             
             $cx('a').each((i, el) => {
                 let href = $cx(el).attr('href') || "";
-                let txt = ($cx(el).text() + " " + href).toLowerCase(); // STRICT: Only reads the link text itself
+                let txt = ($cx(el).text() + " " + href).toLowerCase(); 
 
                 if (href.includes('cricket-live-score') || href.includes('match-details')) {
                     if (t1A.some(a => txt.includes(a)) && t2A.some(a => txt.includes(a))) {
@@ -204,7 +207,7 @@ module.exports = async function (req, res) {
                 
                 $d('a').each((i, el) => {
                     const href = $d(el).attr('href') || "";
-                    const txt = ($d(el).text() + " " + href).toLowerCase(); // STRICT ISOLATION
+                    const txt = ($d(el).text() + " " + href).toLowerCase(); 
 
                     if (href.includes('/live-cricket-scores/') || href.includes('/cricket-scores/')) {
                         if (t1A.some(a => txt.includes(a)) && t2A.some(a => txt.includes(a))) {
@@ -269,15 +272,22 @@ module.exports = async function (req, res) {
     }
 
     // ==============================================================
-    // SELLER 4: RSS XML FEEDS
+    // SELLER 4: RSS XML FEEDS (ONLY IF URL NOT FOUND)
     // ==============================================================
-    if (!payload.status || !payload.live_score) {
+    // If we already secured the specific Match URL from Seller 2 or 3, 
+    // we DO NOT run Seller 4 to prevent it from finding an old match.
+    if (!payload.source_url && (!payload.status || !payload.live_score)) {
         try {
             let xmlData = {};
             const { data: xmlBody } = await axios.get('https://www.espncricinfo.com/rss/livescores.xml', { timeout: 3000 });
             const $x = cheerio.load(xmlBody, { xmlMode: true });
             $x('item').each((i, el) => {
                 const title = $x(el).find('title').text().toLowerCase();
+                const desc = $x(el).find('description').text().toLowerCase();
+                
+                // Strict Date Lock for XML
+                if (dateTarget && !title.includes(dateTarget) && !desc.includes(dateTarget)) return true;
+
                 if (t1A.some(a => title.includes(a)) && t2A.some(a => title.includes(a))) {
                     if (!payload.status) xmlData.status = $x(el).find('description').text().trim();
                     if (!payload.live_score) {
@@ -335,6 +345,12 @@ module.exports = async function (req, res) {
                 let m = Math.round(((diffMs % 86400000) % 3600000) / 60000);
                 payload.countdown = `T-MINUS ${hrs}h ${m}m TO OPERATION`;
                 payload.match_state = "countdown";
+                
+                // Ensure UI looks clean for upcoming matches
+                payload.live_score = "Awaiting Deployment";
+                if (!payload.status || payload.status === "Intel Gathering...") {
+                    payload.status = "Pre-Match Standby";
+                }
             }
         } catch(e) {}
     }
