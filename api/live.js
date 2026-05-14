@@ -13,21 +13,19 @@ module.exports = async function (req, res) {
 
   if (!targetTeams) return res.status(200).json({ success: false, error: "Awaiting Target Intel..." });
 
-  // ==========================================
-  // STRICT DATE LOCK PARSER
-  // Extracts "may" and "14" from "May 14 (7:30 PM)"
-  // ==========================================
+  // 1. STRICT DATE LOCK PARSER
   let targetMonth = "";
   let targetDay = "";
   if (rawDateStr) {
       let cleanStr = rawDateStr.split('(')[0].trim().toLowerCase(); 
       let parts = cleanStr.split(' ');
       if (parts.length >= 2) {
-          targetMonth = parts[0].substring(0, 3); // grabs "may"
-          targetDay = parts[1].replace(/\D/g, ''); // grabs "14"
+          targetMonth = parts[0].substring(0, 3); // e.g., "may"
+          targetDay = parts[1].replace(/\D/g, ''); // e.g., "14"
       }
   }
 
+  // 2. INTELLIGENT ALIAS ENGINE
   const teamAliases = {
     "chennai": ["csk", "chennai", "super kings"],
     "delhi": ["dc", "delhi", "capitals"],
@@ -37,7 +35,7 @@ module.exports = async function (req, res) {
     "mumbai": ["mi", "mumbai", "indians"],
     "punjab": ["pbks", "punjab", "kings"],
     "rajasthan": ["rr", "rajasthan", "royals"],
-    "royal": ["rcb", "bengaluru", "bangalore", "challengers"],
+    "royal": ["rcb", "bengaluru", "bangalore", "challengers", "royal challengers"],
     "sunrisers": ["srh", "hyderabad", "sunrisers"]
   };
 
@@ -70,7 +68,7 @@ module.exports = async function (req, res) {
   };
 
   const headers = { 
-      'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36',
+      'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
       'Accept': 'application/json, text/plain, */*'
   };
 
@@ -117,12 +115,12 @@ module.exports = async function (req, res) {
                     for (let m of data.matches) {
                         let tNames = m.teams.map(t => (t.team.longName + " " + t.team.abbreviation).toLowerCase());
                         
-                        // DATE LOCK ENFORCEMENT
+                        // Strict Date Lock Verification
                         if (targetMonth && targetDay) {
                             let mDate = new Date(m.startTime || m.startDate || "");
                             let mMonth = mDate.toLocaleString('en-US', { month: 'short' }).toLowerCase();
                             let mDay = mDate.getDate().toString();
-                            if (mMonth !== targetMonth || mDay !== targetDay) continue; // Reject wrong date
+                            if (mMonth !== targetMonth || mDay !== targetDay) continue; 
                         }
 
                         if (tNames.some(name => t1A.some(a => name.includes(a))) && tNames.some(name => t2A.some(a => name.includes(a)))) {
@@ -130,6 +128,7 @@ module.exports = async function (req, res) {
                             if (m.tossResults && m.tossResults.text) espnData.toss = m.tossResults.text;
                             if (m.ground && m.ground.name) espnData.venue = m.ground.name;
                             espnData.source = "seller-1-espn";
+                            espnData.source_url = `https://www.espncricinfo.com/series/${m.series.objectId}/match/${m.objectId}/live-cricket-score`;
                             
                             let scores = [];
                             m.teams.forEach(t => {
@@ -152,7 +151,7 @@ module.exports = async function (req, res) {
     }
 
     // ==============================================================
-    // SELLER 2: CREX DIRECT HTML (Date Locked)
+    // SELLER 2: CREX (Date Locked & Title-Only Regex)
     // ==============================================================
     if (!isIntelSufficient()) {
         try {
@@ -169,13 +168,10 @@ module.exports = async function (req, res) {
 
                 if (href.includes('cricket-live-score') || href.includes('match-details')) {
                     if (t1A.some(a => fullTxt.includes(a)) && t2A.some(a => fullTxt.includes(a))) {
-                        
-                        // DATE LOCK ENFORCEMENT
                         let isDateMatch = true;
                         if (targetMonth && targetDay) {
                             if (!fullTxt.includes(targetMonth) || !fullTxt.includes(targetDay)) isDateMatch = false;
                         }
-
                         if (isDateMatch || fullTxt.includes('today')) {
                             bestCxUrl = href.startsWith('http') ? href : 'https://crex.com' + href;
                             return false; 
@@ -190,18 +186,20 @@ module.exports = async function (req, res) {
                 
                 let mRes = await axios.get(bestCxUrl, { headers, timeout: 4000 });
                 let $m = cheerio.load(mRes.data);
-                let rawText = $m('body').text().replace(/\s+/g, ' ');
+                
+                // NO MORE GLOBAL BODY SCANNING
+                let pageTitle = $m('title').text() || "";
+                let titleWin = pageTitle.match(/([a-zA-Z\s\-]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
+                if (titleWin) crexData.status = titleWin[1].trim();
+                else crexData.status = $m('.match-info-status, .status, .match-status').first().text().trim();
 
-                let winMatch = rawText.match(/(?:[0-9]+)?([a-zA-Z\s\-]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
-                if (winMatch) crexData.status = winMatch[1].trim();
+                $m('div, span').each((i, el) => {
+                    let text = $m(el).text().trim().replace(/\s+/g, ' ');
+                    if (!crexData.venue && text.startsWith('Venue:')) crexData.venue = text.split('Venue:')[1].split(/(?=Toss|Umpires|Match)/)[0].trim();
+                    if (!crexData.toss && text.startsWith('Toss:')) crexData.toss = text.split('Toss:')[1].split(/(?=Time|Venue|Umpires)/)[0].trim();
+                });
 
-                let venueMatch = rawText.match(/Venue\s*:\s*(.*?)(?=\s+Toss|\s+Umpires|\s+Match)/i);
-                if (venueMatch) crexData.venue = venueMatch[1].trim();
-
-                let tossMatch = rawText.match(/Toss\s*:\s*(.*?)(?=\s+Time|\s+Venue|\s+Umpires)/i);
-                if (tossMatch) crexData.toss = tossMatch[1].trim();
-
-                let scoreMatch = rawText.match(/([A-Z-]+\s*\d+\/\d+\s*\([\d\.]+\))/g);
+                let scoreMatch = $m('body').text().replace(/\s+/g, ' ').match(/([A-Z-]+\s*\d+\/\d+\s*\([\d\.]+\))/g);
                 if (scoreMatch && scoreMatch.length > 0) crexData.live_score = scoreMatch.join(' v ');
 
                 mergeIntel(crexData);
@@ -210,12 +208,11 @@ module.exports = async function (req, res) {
     }
 
     // ==============================================================
-    // SELLER 3: CRICBUZZ MOBILE (Date Locked)
+    // SELLER 3: CRICBUZZ (Deep Archive & Title-Only Regex)
     // ==============================================================
     if (!isIntelSufficient()) {
         try {
             let cbData = {};
-            // Using the Master Series page directly guarantees Dates are visible to the scanner
             const directories = [
                 'https://m.cricbuzz.com/cricket-series/9241/indian-premier-league-2026/matches',
                 'https://m.cricbuzz.com/cricket-match/live-scores'
@@ -235,13 +232,10 @@ module.exports = async function (req, res) {
 
                     if (href.includes('/live-cricket-scores/') || href.includes('/cricket-scores/')) {
                         if (t1A.some(a => fullTxt.includes(a)) && t2A.some(a => fullTxt.includes(a))) {
-                            
-                            // DATE LOCK ENFORCEMENT
                             let isDateMatch = true;
                             if (targetMonth && targetDay) {
                                 if (!fullTxt.includes(targetMonth) || !fullTxt.includes(targetDay)) isDateMatch = false;
                             }
-
                             if (isDateMatch || fullTxt.includes('today')) {
                                 bestCbUrl = href.startsWith('http') ? href : 'https://m.cricbuzz.com' + href;
                                 return false; 
@@ -256,7 +250,7 @@ module.exports = async function (req, res) {
                 let scorecardUrl = bestCbUrl.replace('/live-cricket-scores/', '/live-cricket-scorecard/').replace('/cricket-scores/', '/live-cricket-scorecard/');
                 let factsUrl = bestCbUrl.replace('/live-cricket-scores/', '/cricket-match-facts/').replace('/cricket-scores/', '/cricket-match-facts/');
                 
-                cbData.source = "seller-3-cricbuzz-deep";
+                cbData.source = "seller-3-cricbuzz";
                 cbData.source_url = scorecardUrl;
 
                 const [scRes, factsRes] = await Promise.allSettled([
@@ -264,6 +258,7 @@ module.exports = async function (req, res) {
                     axios.get(factsUrl, { headers, timeout: 4000 })
                 ]);
 
+                // 1. Facts Tab for Venue/Toss/Result
                 if (factsRes.status === 'fulfilled') {
                     const $f = cheerio.load(factsRes.value.data);
                     $f('div, span').each((i, el) => {
@@ -274,14 +269,21 @@ module.exports = async function (req, res) {
                     });
                 }
 
+                // 2. Scorecard Tab for Score and Backup Status
                 if (scRes.status === 'fulfilled') {
                     const $m = cheerio.load(scRes.value.data);
-                    let rawBodyText = $m('body').text().replace(/\s+/g, ' ');
-
+                    
                     if (!cbData.status) {
-                        let winMatch = rawBodyText.match(/(?:[0-9]+)?([a-zA-Z\s]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
-                        if (winMatch) cbData.status = winMatch[1].trim();
-                        else cbData.status = $m('.cb-text-complete, .ui-match-status, .cb-status-msg').first().text().trim();
+                        // NO MORE GLOBAL BODY TEXT SCANNING. ONLY CHECK THE PAGE TITLE!
+                        let pageTitle = $m('title').text() || "";
+                        let titleStatus = "";
+                        pageTitle.split('|')[0].split('-').forEach(part => {
+                            if (part.toLowerCase().includes('won by') || part.toLowerCase().includes('tied')) {
+                                // Cleans rogue numbers from start of title like "4Royal" or "6Punjab"
+                                titleStatus = part.replace(/^[0-9]+/, '').trim();
+                            }
+                        });
+                        cbData.status = titleStatus || $m('.cb-text-complete, .ui-match-status, .cb-status-msg').first().text().trim();
                     }
 
                     let teamScores = [];
@@ -295,9 +297,61 @@ module.exports = async function (req, res) {
     }
 
     // ==============================================================
-    // MATCH STATE ENGINE 
+    // SELLER 4: RSS XML FEEDS (Date Locked Failsafe)
+    // ==============================================================
+    // Only runs if we never found a valid Match URL above
+    if (!payload.source_url && (!payload.status || !payload.live_score)) {
+        try {
+            let xmlData = {};
+            const { data: xmlBody } = await axios.get('https://www.espncricinfo.com/rss/livescores.xml', { timeout: 3000 });
+            const $x = cheerio.load(xmlBody, { xmlMode: true });
+            $x('item').each((i, el) => {
+                const title = $x(el).find('title').text().toLowerCase();
+                const desc = $x(el).find('description').text().toLowerCase();
+                
+                // XML Date Lock
+                if (targetMonth && targetDay && !title.includes(targetMonth) && !desc.includes(targetMonth)) return true;
+
+                if (t1A.some(a => title.includes(a)) && t2A.some(a => title.includes(a))) {
+                    if (!payload.status) xmlData.status = $x(el).find('description').text().trim();
+                    if (!payload.live_score) {
+                        let scoreMatch = $x(el).find('title').text().split(' vs ')[0].trim();
+                        if (scoreMatch.match(/\d+\/\d+/)) xmlData.live_score = scoreMatch;
+                    }
+                    xmlData.source = "seller-4-xml";
+                    return false; 
+                }
+            });
+            mergeIntel(xmlData);
+        } catch(e) {}
+    }
+
+    // ==============================================================
+    // FIREWALL & MATCH STATE ENGINE 
     // ==============================================================
     let lowerStatus = (payload.status || "").toLowerCase();
+    
+    // FIREWALL: Verify the winning team name is actually one of the teams playing
+    let isFakeNewsResult = false;
+    if (lowerStatus.includes('won by')) {
+        let t1Win = t1A.some(alias => lowerStatus.includes(alias));
+        let t2Win = t2A.some(alias => lowerStatus.includes(alias));
+        if (!t1Win && !t2Win) {
+            isFakeNewsResult = true; // The result doesn't belong to either team!
+        }
+    }
+
+    // If it's a fake news footer, wipe it.
+    if (isFakeNewsResult) {
+        payload.status = "Pre-Match Standby";
+        lowerStatus = "pre-match standby";
+    }
+
+    // Clean rogue numbers from the start of the status string (e.g., "6Punjab")
+    if (payload.status && payload.status.match(/^[0-9]+/)) {
+        payload.status = payload.status.replace(/^[0-9]+/, '').trim();
+    }
+
     let isCompleted = lowerStatus.includes('won by') || lowerStatus.includes('result') || lowerStatus.includes('tied');
 
     if (lowerStatus.includes('abandoned')) {
@@ -338,12 +392,11 @@ module.exports = async function (req, res) {
                 payload.countdown = `T-MINUS ${hrs}h ${m}m TO OPERATION`;
                 payload.match_state = "countdown";
                 
-                // FORCE UI CLEANUP FOR UPCOMING MATCHES
                 payload.live_score = "Awaiting Deployment";
-                if (!payload.status || payload.status === "Intel Gathering..." || payload.status.toLowerCase().includes('won by')) {
+                if (!payload.status || payload.status === "Intel Gathering...") {
                     payload.status = "Pre-Match Standby";
                 }
-                payload.result = null;
+                payload.result = null; // Clear any false results
             }
         } catch(e) {}
     }
