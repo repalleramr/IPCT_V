@@ -113,19 +113,7 @@ module.exports = async function (req, res) {
              (payload.toss && payload.toss.length > 3);
   }
 
-  function matchesTeams(fullTxt) {if (
-    matchesTeams(fullTxt) &&
-    (
-        !currentMission.id ||
-        fullTxt.includes(currentMission.id) ||
-        (
-            targetMonth &&
-            targetDay &&
-            fullTxt.includes(targetMonth) &&
-            fullTxt.includes(targetDay)
-        )
-    )
-) {
+  function matchesTeams(fullTxt) {
       if (!fullTxt) return false;
       let t1Match = t1 !== "tbd" && t1A.some(a => fullTxt.includes(a));
       let t2Match = t2 !== "tbd" && t2A.some(a => fullTxt.includes(a));
@@ -227,7 +215,7 @@ module.exports = async function (req, res) {
                 
                 let pageTitle = $m('title').text() || "";
                 let titleWin = pageTitle.match(/([a-zA-Z\s\-]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
-                
+
                 if (titleWin) crexData.status = titleWin[1].trim();
                 else crexData.status = $m('.match-info-status, .status, .match-status').first().text().trim();
 
@@ -418,15 +406,14 @@ module.exports = async function (req, res) {
             }
         } catch(e) {}
     }
-// ==============================================================
-    // ABSOLUTE VENUE ENGINE
-    // Priority: Scraped Venue > Master Ledger Venue
-    // Fix: past/completed matches should always use master ledger venue
+
     // ==============================================================
-    if (payload.match_state === "completed" || payload.match_state === "abandoned") {
-      payload.venue = currentMission.venue;
-    } else if (!payload.venue || payload.venue === "Location Secure") {
-      payload.venue = currentMission.venue;
+    // ABSOLUTE VENUE ENGINE
+    // Venue is taken only from scraped live-site sources.
+    // No hardcoded venue fallback from the internal ledger.
+    // ==============================================================
+    if (!payload.venue) {
+      payload.venue = "Location Secure";
     }
 
     // Post-Cascade Fallbacks 
