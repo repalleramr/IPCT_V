@@ -1,4 +1,3 @@
-
 const axios = require('axios');
 const cheerio = require('cheerio');
 
@@ -17,7 +16,6 @@ module.exports = async function (req, res) {
   // 0. THE URL INTERCEPTOR (Force Mobile Commentary Page)
   // ==============================================================
   if (targetUrl.includes('cricbuzz.com')) {
-      // Bypasses desktop armor AND forces the "Live Commentary" page where recent balls exist
       targetUrl = targetUrl.replace('www.', 'm.').replace('/live-cricket-scorecard/', '/cricket-scores/');
   }
 
@@ -36,9 +34,6 @@ module.exports = async function (req, res) {
   });
   let currentMission = MASTER_LEDGER[ledgerKey] || { id: "", expected: [], venue: "Location Secure" };
 
-  // ==============================================================
-  // 2. ALIAS ENGINE
-  // ==============================================================
   const teamAliases = {
     "chennai": ["csk", "chennai", "super kings"],
     "delhi": ["dc", "delhi", "capitals"],
@@ -59,16 +54,11 @@ module.exports = async function (req, res) {
   const t2A = [...(teamAliases[t2] || []), t2];
 
   let payload = {
-        title: "IPL LIVE INTEL", 
-        status: "Scanning Fields...", 
-        match_state: "standby",
-        live_score: "Awaiting Data", 
-        overs: null, target: null, required_rr: null, current_rr: null,
+        title: "IPL LIVE INTEL", status: "Scanning Fields...", match_state: "standby",
+        live_score: "Awaiting Data", overs: null, target: null, required_rr: null, current_rr: null,
         striker: null, non_striker: null, bowler: null,
-        toss: "Awaiting Coin Drop", result: null, 
-        venue: currentMission.venue, 
-        last_ball: null, last_over: [], 
-        prediction: "Tracking...", countdown: null,
+        toss: "Awaiting Coin Drop", result: null, venue: currentMission.venue, 
+        last_ball: null, last_over: [], prediction: "AWAITING TELEMETRY...", countdown: null,
         source: "searching", source_url: targetUrl
   };
 
@@ -104,7 +94,6 @@ module.exports = async function (req, res) {
                 payload.live_score = score;
                 payload.match_state = "live";
             } else {
-                // Regex fallback if classes change
                 let scoreMatch = rawBodyText.match(/([A-Z]{2,4}\s\d+\/\d+\s\(\d+\.\d+\))/);
                 if (scoreMatch) {
                     payload.live_score = scoreMatch[1];
@@ -112,7 +101,14 @@ module.exports = async function (req, res) {
                 }
             }
 
-            // 2. Batsmen & Bowler Extraction
+            // 2. Run Rate Extraction (For the AI Engine)
+            let crrMatch = rawBodyText.match(/CRR:\s*([\d\.]+)/i);
+            if (crrMatch) payload.current_rr = crrMatch[1];
+
+            let reqMatch = rawBodyText.match(/REQ:\s*([\d\.]+)/i);
+            if (reqMatch) payload.required_rr = reqMatch[1];
+
+            // 3. Batsmen & Bowler Extraction
             let batsmen = [];
             $('.cb-min-inf').each((i, el) => {
                 let text = $(el).text().trim();
@@ -124,36 +120,28 @@ module.exports = async function (req, res) {
             let cbBowler = $('.cb-min-bowl-rw').find('a').first().text().trim();
             if(cbBowler) payload.bowler = cbBowler;
 
-            // 3. NUCLEAR BALL-BY-BALL HUNTER
+            // 4. BALL-BY-BALL HUNTER
             payload.last_over = [];
-            // Method A: Standard CSS Classes
             $('.cb-min-rcnt span, .cb-rcnt-ovr span').each((i, el) => {
                 let b = $(el).text().trim();
                 if (b && b !== '|' && b.toLowerCase() !== 'recent:') payload.last_over.push(b);
             });
             
-            // Method B: Regex Text Search Fallback (If classes fail)
             if (payload.last_over.length === 0) {
                 let recentTextMatch = rawBodyText.match(/Recent\s*:\s*([W0-9NbLwd|\s]+)/i);
                 if (recentTextMatch) {
-                    let balls = recentTextMatch[1].split(/[|\s]+/).filter(b => b.trim());
-                    payload.last_over = balls;
+                    payload.last_over = recentTextMatch[1].split(/[|\s]+/).filter(b => b.trim());
                 }
             }
             
-            // Slice to keep only the last 6 balls
-            if (payload.last_over.length > 0) {
-                payload.last_over = payload.last_over.slice(-6);
-            }
+            if (payload.last_over.length > 0) payload.last_over = payload.last_over.slice(-6);
 
-            // Status fallback
             let cbStatus = $('.cb-text-complete, .cb-status-msg').first().text().trim();
             if (cbStatus) payload.status = cbStatus;
 
             if (payload.match_state === "live") payload.source = "cricbuzz-live-mobile";
         }
 
-        // Scrape Toss from Facts via Regex
         if (factsRes.status === 'fulfilled') {
             const $f = cheerio.load(factsRes.value.data);
             let pageText = $f('body').text().replace(/\s+/g, ' ');
@@ -207,7 +195,7 @@ module.exports = async function (req, res) {
     }
 
     // ==============================================================
-    // FINAL MATCH STATE ENGINE
+    // FINAL MATCH STATE & AI PREDICTION ENGINE
     // ==============================================================
     let lowerStatus = (payload.status || "").toLowerCase();
     let isCompleted = lowerStatus.includes('won by') || lowerStatus.includes('tied');
@@ -223,15 +211,31 @@ module.exports = async function (req, res) {
         payload.live_score = "Match Ended"; 
         payload.last_over = ["E", "N", "D"];
         payload.striker = null; payload.bowler = "Mission Concluded";
+        payload.prediction = "MATCH CONCLUDED";
     } else if (payload.live_score && payload.live_score.match(/\d+/)) {
         payload.match_state = "live";
-        payload.prediction = "Active Tracking...";
         if (payload.status === "Scanning Fields..." || payload.status === "Uplink Established") {
             payload.status = "LIVE TELEMETRY ACTIVE";
         }
+        
+        // --- MI6 QUANTUM ORACLE (AI CALCULATION) ---
+        if (payload.required_rr) {
+            // 2nd Innings Target Logic
+            let crr = parseFloat(payload.current_rr || 0);
+            let req = parseFloat(payload.required_rr);
+            if (req > crr + 2.5) payload.prediction = "CHASE CRITICAL (Advantage Bowling Team)";
+            else if (crr > req + 1.0) payload.prediction = "CHASE OPTIMAL (Advantage Batting Team)";
+            else payload.prediction = "MATCH IN BALANCE (Neutral Win Probability)";
+        } else if (payload.current_rr) {
+            // 1st Innings Projection Logic
+            let crr = parseFloat(payload.current_rr);
+            let projectedScore = Math.floor(crr * 20);
+            payload.prediction = `PROJECTED TARGET: ${projectedScore} RUNS`;
+        } else {
+            payload.prediction = "GATHERING PROBABILITY DATA...";
+        }
     }
 
-    // Fill missing UI elements to prevent frontend bugs
     if (payload.last_over.length === 0) payload.last_over = ["-", "-", "-", "-", "-", "-"];
     if (!payload.striker) payload.striker = "Awaiting...";
     if (!payload.bowler) payload.bowler = "Awaiting...";
