@@ -13,28 +13,30 @@ module.exports = async function (req, res) {
 
   if (!targetTeams) return res.status(200).json({ success: false, error: "Awaiting Target Intel..." });
 
-  // 1. MASTER LEDGER (MAY 11 - MAY 31)
+  // ==============================================================
+  // 1. MASTER LEDGER (Pre-Loaded with Absolute Truth Venues)
+  // ==============================================================
   const MASTER_LEDGER = {
-      "may 11": { id: "may 11", expected: ["punjab", "delhi", "pbks", "dc"] },
-      "may 12": { id: "may 12", expected: ["gujarat", "sunrisers", "gt", "srh"] },
-      "may 13": { id: "may 13", expected: ["bengaluru", "kolkata", "rcb", "kkr"] },
-      "may 14": { id: "may 14", expected: ["punjab", "mumbai", "pbks", "mi"] },
-      "may 15": { id: "may 15", expected: ["lucknow", "chennai", "lsg", "csk"] },
-      "may 16": { id: "may 16", expected: ["kolkata", "gujarat", "kkr", "gt"] },
-      "may 17 3:30": { id: "may 17", expected: ["punjab", "bengaluru", "pbks", "rcb"] },
-      "may 17 7:30": { id: "may 17", expected: ["delhi", "rajasthan", "dc", "rr"] },
-      "may 18": { id: "may 18", expected: ["chennai", "sunrisers", "csk", "srh"] },
-      "may 19": { id: "may 19", expected: ["rajasthan", "lucknow", "rr", "lsg"] },
-      "may 20": { id: "may 20", expected: ["kolkata", "mumbai", "kkr", "mi"] },
-      "may 21": { id: "may 21", expected: ["gujarat", "chennai", "gt", "csk"] },
-      "may 22": { id: "may 22", expected: ["sunrisers", "bengaluru", "srh", "rcb"] },
-      "may 23": { id: "may 23", expected: ["lucknow", "punjab", "lsg", "pbks"] },
-      "may 24 3:30": { id: "may 24", expected: ["mumbai", "rajasthan", "mi", "rr"] },
-      "may 24 7:30": { id: "may 24", expected: ["kolkata", "delhi", "kkr", "dc"] },
-      "may 26": { id: "may 26", expected: ["qualifier 1", "qualifier"], isPlayoff: true },
-      "may 27": { id: "may 27", expected: ["eliminator"], isPlayoff: true },
-      "may 29": { id: "may 29", expected: ["qualifier 2", "qualifier"], isPlayoff: true },
-      "may 31": { id: "may 31", expected: ["final"], isPlayoff: true }
+      "may 11": { id: "may 11", expected: ["punjab", "delhi", "pbks", "dc"], venue: "Himachal Pradesh Cricket Association Stadium, Dharamsala" },
+      "may 12": { id: "may 12", expected: ["gujarat", "sunrisers", "gt", "srh"], venue: "Narendra Modi Stadium, Ahmedabad" },
+      "may 13": { id: "may 13", expected: ["bengaluru", "kolkata", "rcb", "kkr"], venue: "M. Chinnaswamy Stadium, Bengaluru" },
+      "may 14": { id: "may 14", expected: ["punjab", "mumbai", "pbks", "mi"], venue: "Himachal Pradesh Cricket Association Stadium, Dharamsala" },
+      "may 15": { id: "may 15", expected: ["lucknow", "chennai", "lsg", "csk"], venue: "Bharat Ratna Shri Atal Bihari Vajpayee Ekana Cricket Stadium, Lucknow" },
+      "may 16": { id: "may 16", expected: ["kolkata", "gujarat", "kkr", "gt"], venue: "Eden Gardens, Kolkata" },
+      "may 17 3:30": { id: "may 17", expected: ["punjab", "bengaluru", "pbks", "rcb"], venue: "Himachal Pradesh Cricket Association Stadium, Dharamsala" },
+      "may 17 7:30": { id: "may 17", expected: ["delhi", "rajasthan", "dc", "rr"], venue: "Arun Jaitley Stadium, Delhi" },
+      "may 18": { id: "may 18", expected: ["chennai", "sunrisers", "csk", "srh"], venue: "MA Chidambaram Stadium, Chennai" },
+      "may 19": { id: "may 19", expected: ["rajasthan", "lucknow", "rr", "lsg"], venue: "Sawai Mansingh Stadium, Jaipur" },
+      "may 20": { id: "may 20", expected: ["kolkata", "mumbai", "kkr", "mi"], venue: "Eden Gardens, Kolkata" },
+      "may 21": { id: "may 21", expected: ["gujarat", "chennai", "gt", "csk"], venue: "Narendra Modi Stadium, Ahmedabad" },
+      "may 22": { id: "may 22", expected: ["sunrisers", "bengaluru", "srh", "rcb"], venue: "Rajiv Gandhi International Stadium, Hyderabad" },
+      "may 23": { id: "may 23", expected: ["lucknow", "punjab", "lsg", "pbks"], venue: "Bharat Ratna Shri Atal Bihari Vajpayee Ekana Cricket Stadium, Lucknow" },
+      "may 24 3:30": { id: "may 24", expected: ["mumbai", "rajasthan", "mi", "rr"], venue: "Wankhede Stadium, Mumbai" },
+      "may 24 7:30": { id: "may 24", expected: ["kolkata", "delhi", "kkr", "dc"], venue: "Eden Gardens, Kolkata" },
+      "may 26": { id: "may 26", expected: ["qualifier 1", "qualifier"], isPlayoff: true, venue: "Narendra Modi Stadium, Ahmedabad" },
+      "may 27": { id: "may 27", expected: ["eliminator"], isPlayoff: true, venue: "Narendra Modi Stadium, Ahmedabad" },
+      "may 29": { id: "may 29", expected: ["qualifier 2", "qualifier"], isPlayoff: true, venue: "MA Chidambaram Stadium, Chennai" },
+      "may 31": { id: "may 31", expected: ["final"], isPlayoff: true, venue: "MA Chidambaram Stadium, Chennai" }
   };
 
   let requestTime = rawDateStr.toLowerCase();
@@ -48,9 +50,8 @@ module.exports = async function (req, res) {
       }
   });
 
-  let currentMission = MASTER_LEDGER[ledgerKey] || { id: "", expected: [] };
+  let currentMission = MASTER_LEDGER[ledgerKey] || { id: "", expected: [], venue: "Location Secure" };
 
-  // STRICT DATE LOCK PARSER
   let targetMonth = "";
   let targetDay = "";
   if (rawDateStr) {
@@ -107,12 +108,10 @@ module.exports = async function (req, res) {
       if (payload.last_over.length === 0 && newData.last_over && newData.last_over.length > 0) payload.last_over = newData.last_over;
       if (newData.source) payload.source = newData.source;
       if (newData.source_url) payload.source_url = newData.source_url;
-      if (newData.match_state) payload.match_state = newData.match_state; // Explicit State Passing
   }
 
   function isIntelSufficient() {
       return (payload.status && payload.status.length > 3) && 
-             (payload.venue && payload.venue.length > 3) && 
              (payload.toss && payload.toss.length > 3);
   }
 
@@ -157,15 +156,9 @@ module.exports = async function (req, res) {
                         if (matchesTeams(fullTxt)) {
                             espnData.status = m.statusText || m.status;
                             if (m.tossResults && m.tossResults.text) espnData.toss = m.tossResults.text;
-                            if (m.ground && m.ground.name) espnData.venue = m.ground.name;
                             espnData.source = "seller-1-espn";
                             espnData.source_url = `https://www.espncricinfo.com/series/${m.series.objectId}/match/${m.objectId}/live-cricket-score`;
                             
-                            // EXPLICIT STATE FIX
-                            if (m.state === "POST") espnData.match_state = "completed";
-                            else if (m.state === "LIVE") espnData.match_state = "live";
-                            else if (m.state === "PRE") espnData.match_state = "pre-match";
-
                             let scores = [];
                             m.teams.forEach(t => {
                                 if (t.score) {
@@ -221,20 +214,14 @@ module.exports = async function (req, res) {
                 let mRes = await axios.get(cxMatchUrl, { headers, timeout: 4000 });
                 let $m = cheerio.load(mRes.data);
                 
-                // EXPLICIT TITLE PARSING ONLY (NO BODY TEXT)
                 let pageTitle = $m('title').text() || "";
                 let titleWin = pageTitle.match(/([a-zA-Z\s\-]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
                 
-                if (titleWin) {
-                    crexData.status = titleWin[1].trim();
-                    crexData.match_state = "completed";
-                } else {
-                    crexData.status = $m('.match-info-status, .status, .match-status').first().text().trim();
-                }
+                if (titleWin) crexData.status = titleWin[1].trim();
+                else crexData.status = $m('.match-info-status, .status, .match-status').first().text().trim();
 
                 $m('div, span').each((i, el) => {
                     let text = $m(el).text().trim().replace(/\s+/g, ' ');
-                    if (!crexData.venue && text.startsWith('Venue:')) crexData.venue = text.split('Venue:')[1].split(/(?=Toss|Umpires|Match)/)[0].trim();
                     if (!crexData.toss && text.startsWith('Toss:')) crexData.toss = text.split('Toss:')[1].split(/(?=Time|Venue|Umpires)/)[0].trim();
                 });
 
@@ -296,7 +283,6 @@ module.exports = async function (req, res) {
                     const $f = cheerio.load(factsRes.value.data);
                     $f('div, span').each((i, el) => {
                         let text = $f(el).text().trim().replace(/\s+/g, ' ');
-                        if (!cbData.venue && text.match(/^Venue\s*:/i)) cbData.venue = text.split(/Venue\s*:/i)[1].split(/•|Date|{/)[0].trim();
                         if (!cbData.toss && text.match(/^Toss\s*:/i)) cbData.toss = text.split(/Toss\s*:/i)[1].split(/•|Date|Time|{/)[0].trim();
                     });
                 }
@@ -304,7 +290,6 @@ module.exports = async function (req, res) {
                 if (scRes.status === 'fulfilled') {
                     const $m = cheerio.load(scRes.value.data);
                     
-                    // EXPLICIT TITLE PARSING ONLY
                     let pageTitle = $m('title').text() || "";
                     let titleStatus = "";
                     pageTitle.split('|')[0].split('-').forEach(part => {
@@ -313,15 +298,9 @@ module.exports = async function (req, res) {
                         }
                     });
                     
-                    if (titleStatus) {
-                        cbData.status = titleStatus;
-                        cbData.match_state = "completed"; // Forced state!
-                    } else if ($m('.cb-text-complete').length > 0) {
-                        cbData.status = $m('.cb-text-complete').first().text().trim();
-                        cbData.match_state = "completed"; // Forced state!
-                    } else {
-                        cbData.status = $m('.ui-match-status, .cb-status-msg').first().text().trim();
-                    }
+                    if (titleStatus) cbData.status = titleStatus;
+                    else if ($m('.cb-text-complete').length > 0) cbData.status = $m('.cb-text-complete').first().text().trim();
+                    else cbData.status = $m('.ui-match-status, .cb-status-msg').first().text().trim();
 
                     let teamScores = [];
                     $m('.ui-bat-team-scores, .cb-min-bat-rw').each((i, el) => teamScores.push($m(el).text().trim()));
@@ -363,47 +342,50 @@ module.exports = async function (req, res) {
     // ==============================================================
     let lowerStatus = (payload.status || "").toLowerCase();
 
-    // Clean rogue numbers
+    let isFakeNewsResult = false;
+    if (lowerStatus.includes('won by')) {
+        let textIsValid = false;
+        let t1Win = t1 !== "tbd" && t1A.some(alias => lowerStatus.includes(alias));
+        let t2Win = t2 !== "tbd" && t2A.some(alias => lowerStatus.includes(alias));
+        
+        if (t1Win || t2Win) textIsValid = true;
+        if (currentMission.isPlayoff && !textIsValid) textIsValid = currentMission.expected.some(e => lowerStatus.includes(e));
+        if (!textIsValid) isFakeNewsResult = true; 
+    }
+
+    if (isFakeNewsResult) {
+        payload.status = "Pre-Match Standby";
+        lowerStatus = "pre-match standby";
+    }
+
     if (payload.status && payload.status.match(/^[0-9]+/)) {
         payload.status = payload.status.replace(/^[0-9]+/, '').trim();
         lowerStatus = payload.status.toLowerCase();
     }
 
-    // We only evaluate 'isCompleted' if the explicit state wasn't already passed by a Seller
-    if (payload.match_state === "standby") {
-        let isCompleted = lowerStatus.includes('won by') || lowerStatus.includes('tied');
+    let isCompleted = lowerStatus.includes('won by') || lowerStatus.includes('tied');
 
-        if (lowerStatus.includes('abandoned')) {
-            payload.match_state = "abandoned"; 
-        } else if (lowerStatus.includes('delay') || lowerStatus.includes('rain') || lowerStatus.includes('stumps')) {
-            payload.match_state = "delay"; 
-        } else if (isCompleted) {
-            payload.match_state = "completed"; 
-        } else if (lowerStatus.includes('toss')) {
-            payload.match_state = "pre-match"; 
-            if (!payload.toss) payload.toss = payload.status;
-        } else if (payload.live_score && payload.live_score.match(/\d+/)) {
-            payload.match_state = "live";
-            payload.prediction = "Active Tracking...";
-        }
-    }
-
-    // Final Polish based on exact state
-    if (payload.match_state === "completed") {
+    if (lowerStatus.includes('abandoned')) {
+        payload.match_state = "abandoned"; payload.title = "MISSION ABORTED";
+    } else if (lowerStatus.includes('delay') || lowerStatus.includes('rain') || lowerStatus.includes('stumps')) {
+        payload.match_state = "delay"; payload.title = "WEATHER PROTOCOL";
+    } else if (isCompleted) {
+        payload.match_state = "completed"; 
         payload.title = "MISSION ACCOMPLISHED";
         payload.result = payload.status; 
         payload.live_score = "Match Ended"; 
         payload.last_over = ["E", "N", "D"];
-        payload.striker = null; 
-        payload.bowler = "Mission Concluded";
-    } else if (payload.match_state === "abandoned") {
-        payload.title = "MISSION ABORTED";
-    } else if (payload.match_state === "delay") {
-        payload.title = "WEATHER PROTOCOL";
+        payload.striker = null; payload.bowler = "Mission Concluded";
+    } else if (lowerStatus.includes('toss')) {
+        payload.match_state = "pre-match"; 
+        if (!payload.toss) payload.toss = payload.status;
+    } else if (payload.live_score && payload.live_score.match(/\d+/)) {
+        payload.match_state = "live";
+        payload.prediction = "Active Tracking...";
     }
 
     // ==============================================================
-    // VERCEL NATIVE TIMEZONE COUNTDOWN ENGINE (48 HOURS)
+    // DEEP-TIME COUNTDOWN ENGINE (Days, Weeks, Hours, Minutes)
     // ==============================================================
     if (rawDateStr && (payload.match_state === "standby" || payload.match_state === "pre-match" || payload.match_state === "delay")) {
         try {
@@ -423,10 +405,21 @@ module.exports = async function (req, res) {
                 let now = new Date(); 
                 let diffMs = targetDate.getTime() - now.getTime();
                 
-                if (diffMs > 0 && diffMs < 172800000) { 
-                    let hrs = Math.floor(diffMs / 3600000);
-                    let m = Math.floor(((diffMs % 3600000) / 60000));
-                    payload.countdown = `T-MINUS ${hrs}h ${m}m TO OPERATION`;
+                if (diffMs > 0) { 
+                    let totalMins = Math.floor(diffMs / 60000);
+                    let m = totalMins % 60;
+                    let totalHrs = Math.floor(totalMins / 60);
+                    let h = totalHrs % 24;
+                    let totalDays = Math.floor(totalHrs / 24);
+                    let d = totalDays % 7;
+                    let w = Math.floor(totalDays / 7);
+
+                    let cdStr = "T-MINUS ";
+                    if (w > 0) cdStr += `${w}w `;
+                    if (d > 0 || w > 0) cdStr += `${d}d `;
+                    cdStr += `${h}h ${m}m TO OPERATION`;
+
+                    payload.countdown = cdStr;
                     payload.match_state = "countdown";
                     
                     payload.live_score = "Awaiting Deployment";
@@ -439,7 +432,15 @@ module.exports = async function (req, res) {
         } catch(e) {}
     }
 
-    // Fallbacks 
+    // ==============================================================
+    // ABSOLUTE VENUE OVERRIDE
+    // Injects the fixed BCCI venue directly from the Master Ledger
+    // ==============================================================
+    if (currentMission.venue) {
+        payload.venue = currentMission.venue;
+    }
+
+    // Post-Cascade Fallbacks 
     if (!payload.live_score) payload.live_score = "Intel Unavailable";
     if (!payload.venue) payload.venue = "Location Secure";
     if (!payload.toss) payload.toss = "Awaiting Coin Drop";
