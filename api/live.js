@@ -13,9 +13,7 @@ module.exports = async function (req, res) {
 
   if (!targetTeams) return res.status(200).json({ success: false, error: "Awaiting Target Intel..." });
 
-  // ==============================================================
   // 1. MASTER LEDGER (Pre-Loaded with Absolute Truth Venues)
-  // ==============================================================
   const MASTER_LEDGER = {
       "may 11": { id: "may 11", expected: ["punjab", "delhi", "pbks", "dc"], venue: "Himachal Pradesh Cricket Association Stadium, Dharamsala" },
       "may 12": { id: "may 12", expected: ["gujarat", "sunrisers", "gt", "srh"], venue: "Narendra Modi Stadium, Ahmedabad" },
@@ -156,6 +154,7 @@ module.exports = async function (req, res) {
                         if (matchesTeams(fullTxt)) {
                             espnData.status = m.statusText || m.status;
                             if (m.tossResults && m.tossResults.text) espnData.toss = m.tossResults.text;
+                            if (m.ground && m.ground.name) espnData.venue = m.ground.name; // Dynamic Venue
                             espnData.source = "seller-1-espn";
                             espnData.source_url = `https://www.espncricinfo.com/series/${m.series.objectId}/match/${m.objectId}/live-cricket-score`;
                             
@@ -222,6 +221,7 @@ module.exports = async function (req, res) {
 
                 $m('div, span').each((i, el) => {
                     let text = $m(el).text().trim().replace(/\s+/g, ' ');
+                    if (!crexData.venue && text.startsWith('Venue:')) crexData.venue = text.split('Venue:')[1].split(/(?=Toss|Umpires|Match)/)[0].trim();
                     if (!crexData.toss && text.startsWith('Toss:')) crexData.toss = text.split('Toss:')[1].split(/(?=Time|Venue|Umpires)/)[0].trim();
                 });
 
@@ -283,6 +283,7 @@ module.exports = async function (req, res) {
                     const $f = cheerio.load(factsRes.value.data);
                     $f('div, span').each((i, el) => {
                         let text = $f(el).text().trim().replace(/\s+/g, ' ');
+                        if (!cbData.venue && text.match(/^Venue\s*:/i)) cbData.venue = text.split(/Venue\s*:/i)[1].split(/•|Date|{/)[0].trim();
                         if (!cbData.toss && text.match(/^Toss\s*:/i)) cbData.toss = text.split(/Toss\s*:/i)[1].split(/•|Date|Time|{/)[0].trim();
                     });
                 }
@@ -308,32 +309,6 @@ module.exports = async function (req, res) {
                 }
                 mergeIntel(cbData);
             }
-        } catch(e) {}
-    }
-
-    // ==============================================================
-    // SELLER 4: RSS XML FEEDS
-    // ==============================================================
-    if (!payload.source_url && (!payload.status || !payload.live_score)) {
-        try {
-            let xmlData = {};
-            const { data: xmlBody } = await axios.get('https://www.espncricinfo.com/rss/livescores.xml', { timeout: 3000 });
-            const $x = cheerio.load(xmlBody, { xmlMode: true });
-            $x('item').each((i, el) => {
-                const title = $x(el).find('title').text().toLowerCase();
-                const desc = $x(el).find('description').text().toLowerCase();
-                
-                if (matchesTeams(title + " " + desc)) {
-                    if (!payload.status) xmlData.status = $x(el).find('description').text().trim();
-                    if (!payload.live_score) {
-                        let scoreMatch = $x(el).find('title').text().split(' vs ')[0].trim();
-                        if (scoreMatch.match(/\d+\/\d+/)) xmlData.live_score = scoreMatch;
-                    }
-                    xmlData.source = "seller-4-xml";
-                    return false; 
-                }
-            });
-            mergeIntel(xmlData);
         } catch(e) {}
     }
 
@@ -385,7 +360,7 @@ module.exports = async function (req, res) {
     }
 
     // ==============================================================
-    // DEEP-TIME COUNTDOWN ENGINE (Days, Weeks, Hours, Minutes)
+    // DEEP-TIME COUNTDOWN ENGINE
     // ==============================================================
     if (rawDateStr && (payload.match_state === "standby" || payload.match_state === "pre-match" || payload.match_state === "delay")) {
         try {
@@ -433,10 +408,10 @@ module.exports = async function (req, res) {
     }
 
     // ==============================================================
-    // ABSOLUTE VENUE OVERRIDE
-    // Injects the fixed BCCI venue directly from the Master Ledger
+    // ABSOLUTE VENUE ENGINE
+    // Priority: Scraped Venue > Master Ledger Venue
     // ==============================================================
-    if (currentMission.venue) {
+    if (!payload.venue || payload.venue === "Location Secure") {
         payload.venue = currentMission.venue;
     }
 
