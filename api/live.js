@@ -2,134 +2,123 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 
 module.exports = async function (req, res) {
-  // --- CORS & HEADERS ---
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const targetTeams = (req.query.teams || "").toLowerCase().trim();
-  const rawDateStr = req.query.time || ""; 
   const targetUrl = req.query.url || "";
-
-  if (!targetTeams && !targetUrl) {
-      return res.status(200).json({ success: false, error: "Awaiting Target Intel..." });
-  }
-
-  // ==============================================================
-  // 1. MASTER LEDGER (Absolute Truth for Venues & IDs)
-  // ==============================================================
-  const MASTER_LEDGER = {
-      "may 14": { id: "may 14", expected: ["punjab", "mumbai", "pbks", "mi"], venue: "HPCA Stadium, Dharamsala" },
-      "may 15": { id: "may 15", expected: ["lucknow", "chennai", "lsg", "csk"], venue: "Ekana Stadium, Lucknow" }
-  };
+  const teamsParam = (req.query.teams || "").toLowerCase();
 
   let payload = {
-        title: "IPL LIVE INTEL", 
-        status: "Uplink Established", 
+        title: "IPL LIVE INTEL",
+        status: "Scanning Fields...",
         match_state: "standby",
-        live_score: "Match Not Started", 
-        striker: "Awaiting...", 
-        bowler: "Awaiting...",
-        toss: "Awaiting Coin Drop", 
-        venue: "HPCA Stadium, Dharamsala",
-        last_over: ["-", "-", "-", "-", "-", "-"],
-        source: "awaiting-seller"
+        live_score: "Awaiting Data",
+        striker: "-",
+        bowler: "-",
+        toss: "Awaiting Coin Drop",
+        venue: "Detecting Venue...",
+        last_over: [],
+        source: "searching"
   };
 
   const headers = { 'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36' };
 
-  // ==============================================================
-  // WATERFALL STEP 1: CRICBUZZ LIVE SCRAPER (Primary Score & Toss)
-  // ==============================================================
   try {
-    if (targetUrl) {
-        const res1 = await axios.get(targetUrl, { headers, timeout: 3000 });
-        const $ = cheerio.load(res1.data);
-        let bodyText = $('body').text().replace(/\s+/g, ' ');
+    // ==============================================================
+    // SELLER 1: CRICBUZZ DIRECT (Scorecard + Match Facts)
+    // ==============================================================
+    if (targetUrl.includes('cricbuzz.com')) {
+        const factsUrl = targetUrl.replace('/live-cricket-scorecard/', '/cricket-match-facts/');
+        const [scRes, factsRes] = await Promise.allSettled([
+            axios.get(targetUrl, { headers, timeout: 3000 }),
+            axios.get(factsUrl, { headers, timeout: 3000 })
+        ]);
 
-        // A. Live Score Scraper
-        let score = $('.cb-font-20').first().text().trim();
-        if (score && /\d/.test(score)) {
-            payload.live_score = score;
-            payload.match_state = "live";
+        if (scRes.status === 'fulfilled') {
+            const $ = cheerio.load(scRes.value.data);
+            payload.live_score = $('.cb-font-20').first().text().trim() || payload.live_score;
+            payload.venue = $('.cb-nav-subhdr').text().split(',')[1]?.trim() || payload.venue;
+            
+            // Extract Players
+            $('.cb-min-inf').each((i, el) => { if (i === 0) payload.striker = $(el).text().trim(); });
+            payload.bowler = $('.cb-min-bowl-rw').find('a').first().text().trim() || payload.bowler;
+            
+            // Extract Recent Over
+            $('.cb-min-rcnt span').each((i, el) => {
+                let b = $(el).text().trim();
+                if (b && b !== '|') payload.last_over.push(b);
+            });
+            payload.last_over = payload.last_over.slice(-6);
+            
+            if (payload.live_score.match(/\d/)) {
+                payload.match_state = "live";
+                payload.source = "cricbuzz-live";
+            }
         }
 
-        // B. Nuclear Toss Hunter (Looks for sentence structure)
-        let tossMatch = bodyText.match(/([A-Z][a-z]+\s[A-Za-z]+\swon the toss and (?:opted|elected|chose) to (?:bat|bowl) first)/i);
-        if (tossMatch) {
-            payload.toss = tossMatch[1].trim();
-            payload.status = payload.toss;
-        }
-
-        // C. Live Telemetry (Striker/Bowler)
-        $('.cb-min-inf').each((i, el) => { if (i === 0) payload.striker = $(el).text().trim(); });
-        payload.bowler = $('.cb-min-bowl-rw').find('a').first().text().trim();
-
-        if (payload.match_state === "live") {
-            payload.source = "Site-1-Cricbuzz";
-            return res.status(200).json({ success: true, match_info: payload });
+        if (factsRes.status === 'fulfilled') {
+            const $f = cheerio.load(factsRes.value.data);
+            let pageText = $f('body').text().replace(/\s+/g, ' ');
+            let tossMatch = pageText.match(/([A-Z][a-z]+\s[A-Za-z]+\swon the toss and (?:opted|elected|chose) to (?:bat|bowl) first)/i);
+            if (tossMatch) {
+                payload.toss = tossMatch[1].trim();
+                payload.status = payload.toss;
+            }
         }
     }
-  } catch (e) { /* Cascade to Step 2 */ }
 
-  // ==============================================================
-  // WATERFALL STEP 2: ESPN JSON API FALLBACK (The Fast Intel)
-  // ==============================================================
-  try {
-    const res2 = await axios.get('https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current', { headers, timeout: 3000 });
-    const match = res2.data.matches.find(m => m.teams.some(t => t.team.abbreviation === 'MI' || t.team.abbreviation === 'PBKS'));
-    
-    if (match) {
-        payload.status = match.statusText || payload.status;
-        if (match.tossResults && match.tossResults.text) payload.toss = match.tossResults.text;
+    // ==============================================================
+    // SELLER 2: ESPN CRICINFO API (Deep JSON Hunt)
+    // ==============================================================
+    if (payload.source === "searching" || payload.toss === "Awaiting Coin Drop") {
+        const espn = await axios.get('https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current', { headers, timeout: 3000 });
+        const match = espn.data.matches.find(m => {
+            const txt = (m.title + " " + m.teams.map(t => t.team.name).join(" ")).toLowerCase();
+            return teamsParam ? teamsParam.split(' vs ').every(t => txt.includes(t.trim())) : true;
+        });
+
+        if (match) {
+            if (match.status === "Live" || match.status === "In Progress") {
+                payload.match_state = "live";
+                payload.live_score = `${match.teams[0].score || '0/0'} (${match.teams[0].overs || '0'})`;
+                payload.status = match.statusText;
+                payload.source = "espn-api";
+            }
+            if (match.tossResults && match.tossResults.text) {
+                payload.toss = match.tossResults.text;
+                if (payload.match_state === "standby") payload.status = payload.toss;
+            }
+        }
+    }
+
+    // ==============================================================
+    // SELLER 3: GOOGLE SPORTS/GENERIC REGEX (The "Last Ditch" Scrape)
+    // ==============================================================
+    if (payload.source === "searching") {
+        // If everything else fails, we attempt to find ANY score pattern on the target page
+        const backupRes = await axios.get(targetUrl, { headers, timeout: 3000 });
+        const $b = cheerio.load(backupRes.data);
+        const bodyText = $b('body').text();
         
-        if (match.status === "Live") {
+        const scorePattern = bodyText.match(/\d+\/\d+\s\(\d+\.\d+\sOvers\)/);
+        if (scorePattern) {
+            payload.live_score = scorePattern[0];
             payload.match_state = "live";
-            let s1 = match.teams[0].score || "0/0";
-            let o1 = match.teams[0].overs || "0";
-            payload.live_score = `${s1} (${o1})`;
-            payload.source = "Site-2-ESPN";
-            return res.status(200).json({ success: true, match_info: payload });
+            payload.source = "regex-fallback";
         }
     }
-  } catch (e) { /* Cascade to Step 3 */ }
 
-  // ==============================================================
-  // WATERFALL STEP 3: CREX/BACKUP SCRAPER (Last Ditch Scrape)
-  // ==============================================================
-  try {
-    const res3 = await axios.get('https://crex.com/series/indian-premier-league-2026-1PW/matches', { headers, timeout: 3000 });
-    const $3 = cheerio.load(res3.data);
-    let tossFound = false;
-
-    $3('div, span, p').each((i, el) => {
-        let txt = $3(el).text().trim();
-        if (txt.toLowerCase().includes("won the toss")) {
-            payload.toss = txt;
-            payload.status = txt;
-            tossFound = true;
-        }
-    });
-
-    if (tossFound) {
-        payload.source = "Site-3-CREX";
-        return res.status(200).json({ success: true, match_info: payload });
+    // --- FINAL STATUS NORMALIZATION ---
+    if (payload.match_state === "live") {
+        payload.status = "LIVE TELEMETRY ACTIVE";
     }
-  } catch (e) { /* Cascade to Oracle */ }
 
-  // ==============================================================
-  // WATERFALL STEP 4: EMERGENCY ORACLE (The Verified Truth)
-  // ==============================================================
-  // If we are here, it means all sites are blocking or down. 
-  // We provide the confirmed truth for May 14, 2026.
-  payload.toss = "Mumbai Indians won the toss and chose to bowl first";
-  payload.status = payload.toss;
-  
-  // Since it is 7:53 PM, the match is 100% LIVE. We refuse to show "Not Started".
-  payload.match_state = "live";
-  payload.live_score = "LIVE TRACKING ACTIVE";
-  payload.source = "Oracle-Final-Intelligence";
+    return res.status(200).json({ success: true, match_info: payload });
 
-  return res.status(200).json({ success: true, match_info: payload });
+  } catch (err) {
+    return res.status(200).json({ success: false, error: "Total Uplink Failure: " + err.message });
+  }
 };
