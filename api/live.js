@@ -12,8 +12,9 @@ module.exports = async function (req, res) {
   let targetTeams = (req.query.teams || "").toLowerCase().trim();
   let rawDateStr = req.query.time || ""; 
   
-  // Extract clean date for the Temporal Firewall (e.g., "may 15")
   let targetDate = rawDateStr.split('(')[0].trim().toLowerCase();
+  let targetMonth = targetDate.split(' ')[0] || "";
+  let targetDay = targetDate.split(' ')[1] || "";
 
   const headers = { 'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36' };
 
@@ -30,6 +31,29 @@ module.exports = async function (req, res) {
   let activeSource = "";
   let espnMatchData = null; 
 
+  // ==============================================================
+  // 0. THE ALIAS ENGINE (Fixes PBKS vs Punjab routing)
+  // ==============================================================
+  const teamAliases = {
+      "chennai": ["csk", "chennai", "super kings"], "lucknow": ["lsg", "lucknow", "super giants"],
+      "mumbai": ["mi", "mumbai", "indians"], "punjab": ["pbks", "punjab", "kings"],
+      "delhi": ["dc", "delhi", "capitals"], "gujarat": ["gt", "gujarat", "titans"],
+      "kolkata": ["kkr", "kolkata", "knight riders"], "rajasthan": ["rr", "rajasthan", "royals"],
+      "royal": ["rcb", "bengaluru", "bangalore", "challengers"], "sunrisers": ["srh", "hyderabad", "sunrisers"]
+  };
+
+  let t1 = targetTeams.split(' vs ')[0]?.trim().split(' ')[0] || "unknown";
+  let t2 = targetTeams.split(' vs ')[1]?.trim().split(' ')[0] || "unknown";
+  const t1A = teamAliases[t1] || [t1];
+  const t2A = teamAliases[t2] || [t2];
+
+  function matchesTeams(txt) {
+      if (!txt) return false;
+      let match1 = t1A.some(a => txt.includes(a));
+      let match2 = t2A.some(a => txt.includes(a));
+      return match1 && match2;
+  }
+
   try {
       // ==============================================================
       // PHASE 1: TEMPORAL DATA ACQUISITION (Cricbuzz -> CREX -> ESPN)
@@ -41,8 +65,6 @@ module.exports = async function (req, res) {
           try {
               let cbUrl = targetUrl;
               if (!cbUrl && targetTeams) {
-                  let t1 = targetTeams.split(' vs ')[0].trim().split(' ')[0];
-                  // Search Upcoming & Recent to bypass live-only limitations
                   const searchUrls = [
                       'https://m.cricbuzz.com/cricket-match/live-scores/upcoming',
                       'https://m.cricbuzz.com/cricket-match/live-scores',
@@ -57,11 +79,10 @@ module.exports = async function (req, res) {
                           let href = $(el).attr('href') || "";
                           let parentTxt = $(el).parent().parent().text().toLowerCase();
                           
-                          // STRICT IPL 2026 + DATE FIREWALL
-                          let isIPL2026 = href.includes('indian-premier-league-2026') || parentTxt.includes('ipl 2026');
-                          let dateMatch = targetDate ? (txt.includes(targetDate) || parentTxt.includes(targetDate)) : true;
+                          let isIPL = href.includes('indian-premier-league') || parentTxt.includes('ipl');
+                          let isDateMatch = targetDate ? ((txt.includes(targetMonth) && txt.includes(targetDay)) || (parentTxt.includes(targetMonth) && parentTxt.includes(targetDay)) || txt.includes('today') || txt.includes('yesterday') || parentTxt.includes('yesterday')) : true;
                           
-                          if (isIPL2026 && dateMatch && txt.includes(t1) && href.includes('scores')) {
+                          if (isIPL && isDateMatch && matchesTeams(txt + " " + parentTxt) && href.includes('scores')) {
                               cbUrl = 'https://m.cricbuzz.com' + href;
                           }
                       });
@@ -89,13 +110,12 @@ module.exports = async function (req, res) {
               if (!crexUrl && targetTeams) {
                   const cxRes = await axios.get('https://crex.live/fixtures/match-list', { headers, timeout: 3000 });
                   const $cx = cheerio.load(cxRes.data);
-                  let t1 = targetTeams.split(' vs ')[0].trim().split(' ')[0];
                   $cx('a').each((i, el) => {
                       let txt = $cx(el).text().toLowerCase();
                       let href = $cx(el).attr('href') || "";
-                      let dateMatch = targetDate ? txt.includes(targetDate) : true;
+                      let isDateMatch = targetDate ? ((txt.includes(targetMonth) && txt.includes(targetDay)) || txt.includes('today') || txt.includes('yesterday')) : true;
                       
-                      if (txt.includes('ipl') && dateMatch && href.includes('scoreboard') && txt.includes(t1)) {
+                      if ((txt.includes('ipl') || txt.includes('indian premier league')) && isDateMatch && href.includes('scoreboard') && matchesTeams(txt)) {
                           crexUrl = 'https://crex.live' + href;
                       }
                   });
@@ -117,17 +137,17 @@ module.exports = async function (req, res) {
       if (!htmlAcquired) {
           try {
               const espnRes = await axios.get('https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current', { headers, timeout: 3000 });
-              let t1 = targetTeams.split(' vs ')[0].trim().split(' ')[0];
               
               espnMatchData = espnRes.data.matches.find(m => {
                   let isIPL = (m.series?.name?.toLowerCase().includes('ipl') || m.title.toLowerCase().includes('ipl'));
-                  let hasTeam = (m.title.toLowerCase().includes(t1) || m.teams.some(t => t.team.abbreviation.toLowerCase() === t1.toLowerCase()));
+                  let hasTeam = matchesTeams(m.title.toLowerCase() + " " + m.teams.map(t => t.team.abbreviation).join(" ").toLowerCase());
                   
                   let mDate = new Date(m.startTime || "");
-                  let mDateStr = mDate.toLocaleString('en-US', { month: 'short', day: 'numeric' }).toLowerCase(); 
-                  let dateMatch = targetDate ? (mDateStr === targetDate || mDateStr.includes(targetDate)) : true;
+                  let options = { timeZone: 'Asia/Kolkata', month: 'short', day: 'numeric' };
+                  let mDateStr = mDate.toLocaleString('en-US', options).toLowerCase(); 
+                  let isDateMatch = targetDate ? (mDateStr === targetDate || mDateStr.includes(targetDay)) : true;
 
-                  return isIPL && hasTeam && dateMatch;
+                  return isIPL && hasTeam && isDateMatch;
               });
               
               if (espnMatchData) {
