@@ -28,11 +28,10 @@ module.exports = async function (req, res) {
 
   let pageTitle = "";
   let bodyText = "";
-  let activeSource = "";
   let espnMatchData = null; 
 
   // ==============================================================
-  // 0. THE ALIAS ENGINE (Fixes PBKS vs Punjab routing)
+  // 0. THE ALIAS ENGINE 
   // ==============================================================
   const teamAliases = {
       "chennai": ["csk", "chennai", "super kings"], "lucknow": ["lsg", "lucknow", "super giants"],
@@ -56,7 +55,7 @@ module.exports = async function (req, res) {
 
   try {
       // ==============================================================
-      // PHASE 1: TEMPORAL DATA ACQUISITION (Cricbuzz -> CREX -> ESPN)
+      // PHASE 1: TEMPORAL DATA ACQUISITION 
       // ==============================================================
       let htmlAcquired = false;
 
@@ -65,14 +64,15 @@ module.exports = async function (req, res) {
           try {
               let cbUrl = targetUrl;
               if (!cbUrl && targetTeams) {
-                  const searchUrls = [
-                      'https://m.cricbuzz.com/cricket-match/live-scores/upcoming',
-                      'https://m.cricbuzz.com/cricket-match/live-scores',
-                      'https://m.cricbuzz.com/cricket-match/live-scores/recent'
+                  // We map out the directories and tell the engine if it needs to check the date
+                  const searchDirs = [
+                      { url: 'https://m.cricbuzz.com/cricket-match/live-scores', checkDate: false },
+                      { url: 'https://m.cricbuzz.com/cricket-match/live-scores/upcoming', checkDate: false },
+                      { url: 'https://m.cricbuzz.com/cricket-match/live-scores/recent', checkDate: true }
                   ];
                   
-                  for (let url of searchUrls) {
-                      const res = await axios.get(url, { headers, timeout: 2500 });
+                  for (let dir of searchDirs) {
+                      const res = await axios.get(dir.url, { headers, timeout: 2500 });
                       const $ = cheerio.load(res.data);
                       $('a').each((i, el) => {
                           let txt = $(el).text().toLowerCase();
@@ -80,7 +80,12 @@ module.exports = async function (req, res) {
                           let parentTxt = $(el).parent().parent().text().toLowerCase();
                           
                           let isIPL = href.includes('indian-premier-league') || parentTxt.includes('ipl');
-                          let isDateMatch = targetDate ? ((txt.includes(targetMonth) && txt.includes(targetDay)) || (parentTxt.includes(targetMonth) && parentTxt.includes(targetDay)) || txt.includes('today') || txt.includes('yesterday') || parentTxt.includes('yesterday')) : true;
+                          
+                          // Smart Date Logic: Only enforce strict dates on the Recent/Archive tab
+                          let isDateMatch = true;
+                          if (dir.checkDate && targetDate) {
+                              isDateMatch = txt.includes(targetMonth) || parentTxt.includes(targetMonth) || txt.includes('yesterday') || parentTxt.includes('yesterday');
+                          }
                           
                           if (isIPL && isDateMatch && matchesTeams(txt + " " + parentTxt) && href.includes('scores')) {
                               cbUrl = 'https://m.cricbuzz.com' + href;
@@ -91,16 +96,15 @@ module.exports = async function (req, res) {
               }
               if (cbUrl) {
                   cbUrl = cbUrl.replace('www.', 'm.').replace('/live-cricket-scorecard/', '/cricket-scores/');
-                  const cbRes = await axios.get(cbUrl, { headers, timeout: 3000 });
+                  const cbRes = await axios.get(cbUrl, { headers, timeout: 3500 });
                   const $ = cheerio.load(cbRes.data);
                   $('script, style, noscript').remove();
                   pageTitle = $('title').text() || "";
                   bodyText = $('body').text().replace(/\s+/g, ' ');
                   payload.source_url = cbUrl;
-                  activeSource = "cricbuzz";
                   htmlAcquired = true;
               }
-          } catch (e) { /* Pivot to CREX */ }
+          } catch (e) { /* Pivot */ }
       }
 
       // --- TIER 2: CREX ---
@@ -113,48 +117,46 @@ module.exports = async function (req, res) {
                   $cx('a').each((i, el) => {
                       let txt = $cx(el).text().toLowerCase();
                       let href = $cx(el).attr('href') || "";
-                      let isDateMatch = targetDate ? ((txt.includes(targetMonth) && txt.includes(targetDay)) || txt.includes('today') || txt.includes('yesterday')) : true;
                       
-                      if ((txt.includes('ipl') || txt.includes('indian premier league')) && isDateMatch && href.includes('scoreboard') && matchesTeams(txt)) {
+                      // CREX groups by date headers, so we loosen the date check for live/upcoming
+                      if ((txt.includes('ipl') || txt.includes('indian premier league')) && href.includes('scoreboard') && matchesTeams(txt)) {
                           crexUrl = 'https://crex.live' + href;
                       }
                   });
               }
               if (crexUrl) {
-                  const cRes = await axios.get(crexUrl, { headers, timeout: 3000 });
+                  const cRes = await axios.get(crexUrl, { headers, timeout: 3500 });
                   const $ = cheerio.load(cRes.data);
                   $('script, style, noscript').remove();
                   pageTitle = $('title').text() || "";
                   bodyText = $('body').text().replace(/\s+/g, ' ');
                   payload.source_url = crexUrl;
-                  activeSource = "crex";
                   htmlAcquired = true;
               }
-          } catch (e) { /* Pivot to ESPN */ }
+          } catch (e) { /* Pivot */ }
       }
 
       // --- TIER 3: ESPN JSON API ---
       if (!htmlAcquired) {
           try {
-              const espnRes = await axios.get('https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current', { headers, timeout: 3000 });
-              
-              espnMatchData = espnRes.data.matches.find(m => {
-                  let isIPL = (m.series?.name?.toLowerCase().includes('ipl') || m.title.toLowerCase().includes('ipl'));
-                  let hasTeam = matchesTeams(m.title.toLowerCase() + " " + m.teams.map(t => t.team.abbreviation).join(" ").toLowerCase());
-                  
-                  let mDate = new Date(m.startTime || "");
-                  let options = { timeZone: 'Asia/Kolkata', month: 'short', day: 'numeric' };
-                  let mDateStr = mDate.toLocaleString('en-US', options).toLowerCase(); 
-                  let isDateMatch = targetDate ? (mDateStr === targetDate || mDateStr.includes(targetDay)) : true;
-
-                  return isIPL && hasTeam && isDateMatch;
-              });
+              const espnEndpoints = [
+                  'https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current',
+                  'https://hs-consumer-api.espncricinfo.com/v1/pages/matches/schedule'
+              ];
+              for (let url of espnEndpoints) {
+                  const espnRes = await axios.get(url, { headers, timeout: 3000 });
+                  espnMatchData = espnRes.data.matches.find(m => {
+                      let isIPL = (m.series?.name?.toLowerCase().includes('ipl') || m.title.toLowerCase().includes('ipl'));
+                      let hasTeam = matchesTeams(m.title.toLowerCase() + " " + m.teams.map(t => t.team.abbreviation).join(" ").toLowerCase());
+                      return isIPL && hasTeam;
+                  });
+                  if (espnMatchData) break;
+              }
               
               if (espnMatchData) {
                   pageTitle = espnMatchData.title;
                   bodyText = espnMatchData.statusText + " " + (espnMatchData.tossResults?.text || "");
                   payload.source_url = "ESPN-API-Uplink";
-                  activeSource = "espn";
                   htmlAcquired = true;
               }
           } catch (e) { /* Total Failure */ }
