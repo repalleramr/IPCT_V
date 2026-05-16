@@ -140,7 +140,16 @@ module.exports = async function (req, res) {
       // PHASE 2: BATTLEFIELD ASSESSMENT (State Detection)
       // ==============================================================
       try {
-          if (pageTitle) payload.title = pageTitle.split(/[,|]/)[0].trim();
+          // --- [BOX 0.1] TITLE EXTRACTION (FIXED FOR TARGET #1) ---
+          let vsMatch = pageTitle.match(/([a-zA-Z0-9\s]+?\s+vs\s+[a-zA-Z0-9\s]+)/i);
+          if (vsMatch) {
+              payload.title = vsMatch[1].replace(/live score/i, '').replace(/live/i, '').trim();
+          } else if (targetTeams) {
+              payload.title = targetTeams.replace(/\b\w/g, l => l.toUpperCase()); // Formats "kkr vs gt" to "Kkr Vs Gt"
+          } else {
+              payload.title = pageTitle.split(/[,|]/)[0].trim() || "Live Cricket Match";
+          }
+
           let venueMatch = bodyText.match(/Venue\s*:\s*([^•|{]+)/i) || (espnMatchData && espnMatchData.ground ? [null, espnMatchData.ground.name] : null);
           if (venueMatch) payload.venue = venueMatch[1].trim();
 
