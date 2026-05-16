@@ -242,4 +242,102 @@ module.exports = async function (req, res) {
           let reqMatch = bodyText.match(/REQ:\s*([\d\.]+)/i);
           if (reqMatch) payload.required_rr = reqMatch[1];
 
-          // ------------------------------------------------
+          // -------------------------------------------------------------
+          // THE SR/ECO SPLITTER & STAR-SHIFTER
+          // -------------------------------------------------------------
+          payload.striker = "Target Engaged"; 
+          payload.non_striker = "Off-Strike";
+          payload.bowler = "Active Bowler";
+
+          if ($) {
+              let batters = [];
+              $('.cb-min-bat-rw').each((i, el) => {
+                  let txt = $(el).text().replace(/\s+/g, ' ').trim();
+                  
+                  // SPLITTER: Chops off 'Batter R B 4s 6s SR' leaving only the player info
+                  if (txt.includes('SR ')) txt = txt.split('SR ')[1];
+                  else if (txt.includes('SR')) txt = txt.split('SR')[1];
+
+                  if (txt) {
+                      txt = txt.trim();
+                      // Extracts name (allowing for periods like M.S. Dhoni) up to the first digit
+                      let nameMatch = txt.match(/^([a-zA-Z\s\-\'\.]+?)\s*(?:\*|\d)/);
+                      if (nameMatch && nameMatch[1].trim().length > 2) {
+                          let name = nameMatch[1].trim();
+                          
+                          // Restore the Bat Symbol if it belonged to this text block
+                          if (txt.includes(name + '*') || txt.includes(name + ' *') || txt.startsWith(name + '*')) {
+                              if (!name.includes('*')) name += ' *';
+                          }
+                          batters.push(name);
+                      }
+                  }
+              });
+
+              if (batters.length > 0) {
+                  // STAR-SHIFTER: Ensures whoever has the star goes to striker
+                  let starIndex = batters.findIndex(b => b.includes('*'));
+                  if (starIndex === 1) {
+                      payload.striker = batters[1];
+                      payload.non_striker = batters[0];
+                  } else {
+                      payload.striker = batters[0] || "Target Engaged";
+                      payload.non_striker = batters[1] || "Off-Strike";
+                  }
+              }
+
+              let bowlers = [];
+              $('.cb-min-bowl-rw').each((i, el) => {
+                  let txt = $(el).text().replace(/\s+/g, ' ').trim();
+                  
+                  // SPLITTER: Chops off 'Bowler O M R W ECO' leaving only the player info
+                  if (txt.includes('ECO ')) txt = txt.split('ECO ')[1];
+                  else if (txt.includes('ECO')) txt = txt.split('ECO')[1];
+
+                  if (txt) {
+                      txt = txt.trim();
+                      let nameMatch = txt.match(/^([a-zA-Z\s\-\'\.]+?)\s*\d/);
+                      if (nameMatch && nameMatch[1].trim().length > 2) {
+                          bowlers.push(nameMatch[1].trim());
+                      }
+                  }
+              });
+              
+              if (bowlers[0]) payload.bowler = bowlers[0];
+          }
+
+          // Strict Mobile Last Over Array isolation (Restored)
+          let recentTextMatch = bodyText.match(/Recent\s*:\s*([W0-9NbLwd|\s]+)/i);
+          if (recentTextMatch) {
+              payload.last_over = recentTextMatch[1].split(/[|\s]+/).filter(b => b.trim()).slice(-6);
+          } else {
+              payload.last_over = ["-", "-", "-", "-", "-", "-"];
+          }
+
+          if (payload.required_rr !== "YAHOO: No REQ") payload.prediction = "TRACKING CHASE PROBABILITY...";
+          else if (payload.current_rr !== "YAHOO: No CRR") payload.prediction = `PROJECTED TARGET: ${Math.floor(parseFloat(payload.current_rr) * 20)} RUNS`;
+      } 
+      else if (state === "future") {
+          payload.live_score = "Match Not Started";
+          payload.striker = "Waiting for Openers"; payload.non_striker = "Waiting for Openers";
+          payload.bowler = "Waiting for Bowler"; payload.last_over = ["-", "-", "-", "-", "-", "-"];
+          payload.prediction = "AWAITING START";
+          let matchDate = bodyText.match(/Date\s*:\s*([^•|{]+)/i);
+          if (matchDate) payload.status = `Starts: ${matchDate[1].trim()}`;
+          else if (espnMatchData) payload.status = "Pre-Match Standby";
+          if (payload.toss === "Tracking Toss Data..." || payload.toss.includes("YAHOO")) payload.toss = "Awaiting Coin Drop";
+          if (payload.toss !== "Awaiting Coin Drop") payload.status = payload.toss;
+      }
+
+      return res.status(200).json({ success: true, match_info: payload });
+
+  } catch (err) {
+      payload.status = "OH SORRY: Connection Blocked by All Sites";
+      payload.live_score = "OH SORRY: Cannot Fetch";
+      payload.striker = "OH SORRY"; payload.non_striker = "OH SORRY";
+      payload.bowler = "OH SORRY"; payload.toss = "OH SORRY";
+      payload.venue = "OH SORRY"; payload.prediction = "OH SORRY: AI Offline";
+      payload.last_over = ["O", "H", "S", "R", "R", "Y"];
+      return res.status(200).json({ success: false, error: err.message, match_info: payload });
+  }
+};
