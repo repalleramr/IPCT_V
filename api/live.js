@@ -41,7 +41,8 @@ module.exports = async function (req, res) {
       return res.status(200).json({ success: false, error: "Temporal mismatch", match_info: lockdownPayload });
   }
 
-  const headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }; // Upgraded to Desktop User-Agent
+  // REVERTED TO MOBILE USER-AGENT FOR STABILITY
+  const headers = { 'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36' };
 
   let payload = {
         title: "YAHOO: Target Unknown", status: "Scanning Fields...", match_state: "standby",
@@ -81,20 +82,20 @@ module.exports = async function (req, res) {
 
   try {
       // ==============================================================
-      // PHASE 1: DESKTOP DATA ACQUISITION
+      // PHASE 1: MOBILE DATA ACQUISITION 
       // ==============================================================
       let htmlAcquired = false;
 
-      // --- TIER 1: CRICBUZZ (Strictly Desktop) ---
+      // --- TIER 1: CRICBUZZ MOBILE ---
       if (!htmlAcquired) {
           try {
               let cbUrl = targetUrl;
-              if (cbUrl) cbUrl = cbUrl.replace('m.cricbuzz.com', 'www.cricbuzz.com'); // Force Desktop
-              
+              if (cbUrl) cbUrl = cbUrl.replace('www.cricbuzz.com', 'm.cricbuzz.com'); // Force Mobile
+
               if (!cbUrl && targetTeams) {
                   const searchDirs = [
-                      'https://www.cricbuzz.com/cricket-match/live-scores',
-                      'https://www.cricbuzz.com/cricket-match/live-scores/upcoming'
+                      'https://m.cricbuzz.com/cricket-match/live-scores',
+                      'https://m.cricbuzz.com/cricket-match/live-scores/upcoming'
                   ];
                   
                   for (let dir of searchDirs) {
@@ -109,13 +110,14 @@ module.exports = async function (req, res) {
                           let strictTeamCheck = txt + " " + href; 
                           
                           if (isIPL && hasMatchId && matchesTeams(strictTeamCheck) && href.includes('scores')) {
-                              cbUrl = href.startsWith('http') ? href : 'https://www.cricbuzz.com' + href;
+                              cbUrl = 'https://m.cricbuzz.com' + href;
                           }
                       });
                       if (cbUrl) break;
                   }
               }
               if (cbUrl) {
+                  cbUrl = cbUrl.replace('www.', 'm.').replace('/live-cricket-scorecard/', '/cricket-scores/');
                   const cbRes = await axios.get(cbUrl, { headers, timeout: 4000 });
                   $ = cheerio.load(cbRes.data);
                   $('script, style, noscript').remove();
@@ -201,14 +203,14 @@ module.exports = async function (req, res) {
 
       if (statusLower.includes('won by') || statusLower.includes('tied') || statusLower.includes('abandoned')) {
           state = "completed";
-      } else if (bodyText.includes('CRR:') || bodyText.includes('REQ:') || ($ && $('.cb-min-bat-rw').length > 0) || (espnMatchData && espnMatchData.status === "Live")) {
+      } else if (bodyText.includes('CRR:') || bodyText.includes('REQ:') || ($ && $('.ui-bat-team-scores').length > 0) || (espnMatchData && espnMatchData.status === "Live")) {
           state = "live";
       }
 
       payload.match_state = state;
 
       // ==============================================================
-      // PHASE 3: TIMELINE-SPECIFIC DATA EXTRACTION
+      // PHASE 3: TIMELINE-SPECIFIC DATA EXTRACTION (MOBILE ARCHITECTURE)
       // ==============================================================
       let tossMatch = bodyText.match(/([A-Z][a-zA-Z\s]+won the toss and (?:opted|elected|chose|decided) to (?:bat|bowl|field))/i);
       if (!tossMatch) tossMatch = bodyText.match(/Toss\s*:\s*([^•|{\(]+)/i);
@@ -240,84 +242,4 @@ module.exports = async function (req, res) {
           let reqMatch = bodyText.match(/REQ:\s*([\d\.]+)/i);
           if (reqMatch) payload.required_rr = reqMatch[1];
 
-          // -------------------------------------------------------------
-          // DESKTOP PLAYER PARSER & STAR-SHIFTER PROTOCOL
-          // -------------------------------------------------------------
-          payload.striker = "Target Engaged"; 
-          payload.non_striker = "Off-Strike";
-          payload.bowler = "Active Bowler";
-
-          if ($) {
-              // Extract Both Batsmen (Safely pulling ONLY from anchor tags)
-              let batters = [];
-              $('.cb-min-bat-rw').each((i, el) => {
-                  let name = $(el).find('a.cb-text-link').first().text().trim();
-                  if (name && name.length > 2) {
-                      // Check the row's raw text to see if the bat symbol belongs to this player
-                      if ($(el).text().includes('*')) batters.push(name + " *");
-                      else batters.push(name);
-                  }
-              });
-
-              if (batters.length > 0) {
-                  // STAR-SHIFTER: Ensure whoever has the star becomes the striker
-                  let starIndex = batters.findIndex(b => b.includes('*'));
-                  if (starIndex === 1) {
-                      payload.striker = batters[1];
-                      payload.non_striker = batters[0];
-                  } else {
-                      payload.striker = batters[0] || "Target Engaged";
-                      payload.non_striker = batters[1] || "Off-Strike";
-                  }
-              }
-
-              // Extract Bowler (Safely pulling ONLY from anchor tags)
-              let bowlers = [];
-              $('.cb-min-bowl-rw').each((i, el) => {
-                  let name = $(el).find('a.cb-text-link').first().text().trim();
-                  if (name && name.length > 2) bowlers.push(name);
-              });
-              if (bowlers[0]) payload.bowler = bowlers[0];
-          }
-
-          // Strict Last Over Array isolation
-          if ($ && $('.cb-min-rcnt').length > 0) {
-              let rcntTxt = $('.cb-min-rcnt').text().replace(/Recent\s*:/i, '').trim();
-              payload.last_over = rcntTxt.split(/[|\s]+/).filter(b => b.trim()).slice(-6);
-          } else {
-              let recentTextMatch = bodyText.match(/Recent\s*:\s*([W\dNbLwd\|\s\.\-]+?)(?:[A-Z]{2,}5|%|Key|Match|Partnership|$)/i);
-              if (recentTextMatch) {
-                  let rawBalls = recentTextMatch[1].replace(/[^W\dNbLwd\|\s\.\-]/g, ''); 
-                  payload.last_over = rawBalls.split(/[|\s]+/).filter(b => b.trim()).slice(-6);
-              } else {
-                  payload.last_over = ["-", "-", "-", "-", "-", "-"];
-              }
-          }
-
-          if (payload.required_rr !== "YAHOO: No REQ") payload.prediction = "TRACKING CHASE PROBABILITY...";
-          else if (payload.current_rr !== "YAHOO: No CRR") payload.prediction = `PROJECTED TARGET: ${Math.floor(parseFloat(payload.current_rr) * 20)} RUNS`;
-      } 
-      else if (state === "future") {
-          payload.live_score = "Match Not Started";
-          payload.striker = "Waiting for Openers"; payload.non_striker = "Waiting for Openers";
-          payload.bowler = "Waiting for Bowler"; payload.last_over = ["-", "-", "-", "-", "-", "-"];
-          payload.prediction = "AWAITING START";
-          let matchDate = bodyText.match(/Date\s*:\s*([^•|{]+)/i);
-          if (matchDate) payload.status = `Starts: ${matchDate[1].trim()}`;
-          else if (espnMatchData) payload.status = "Pre-Match Standby";
-          if (payload.toss === "Tracking Toss Data..." || payload.toss.includes("YAHOO")) payload.toss = "Awaiting Coin Drop";
-          if (payload.toss !== "Awaiting Coin Drop") payload.status = payload.toss;
-      }
-
-      return res.status(200).json({ success: true, match_info: payload });
-
-  } catch (err) {
-      payload.status = "OH SORRY: Connection Blocked by All Sites";
-      payload.live_score = "OH SORRY: Cannot Fetch";
-      payload.striker = "OH SORRY"; payload.non_striker = "OH SORRY";
-      payload.bowler = "OH SORRY"; payload.toss = "OH SORRY";
-      payload.venue = "OH SORRY"; payload.prediction = "OH SORRY: AI Offline";
-      payload.last_over = ["O", "H", "S", "R", "R", "Y"];
-      return res.status(200).json({ success: false, error: err.message, match_info: payload });
-  }
-};
+          // ------------------------------------------------
