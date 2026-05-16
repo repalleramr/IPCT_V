@@ -33,7 +33,7 @@ module.exports = async function (req, res) {
   let pageTitle = "";
   let bodyText = "";
   let espnMatchData = null; 
-  let $ = null; // Scope elevated and protected
+  let $ = null; 
 
   // ==============================================================
   // 0. THE ALIAS ENGINE 
@@ -91,7 +91,10 @@ module.exports = async function (req, res) {
                               isDateMatch = txt.includes(targetMonth) || parentTxt.includes(targetMonth) || txt.includes('yesterday') || parentTxt.includes('yesterday');
                           }
                           
-                          if (isIPL && hasMatchId && matchesTeams(txt + " " + parentTxt) && href.includes('scores')) {
+                          // STRICT SCOPE FIX: Only check the link text and the URL slug for teams, NEVER the parent container!
+                          let strictTeamCheck = txt + " " + href; 
+
+                          if (isIPL && hasMatchId && matchesTeams(strictTeamCheck) && href.includes('scores')) {
                               cbUrl = 'https://m.cricbuzz.com' + href;
                           }
                       });
@@ -121,7 +124,9 @@ module.exports = async function (req, res) {
                   $temp('a').each((i, el) => {
                       let txt = $temp(el).text().toLowerCase();
                       let href = $temp(el).attr('href') || "";
-                      if ((txt.includes('ipl') || txt.includes('indian premier league')) && href.includes('scoreboard') && matchesTeams(txt)) {
+                      
+                      let strictTeamCheck = txt + " " + href;
+                      if ((txt.includes('ipl') || txt.includes('indian premier league')) && href.includes('scoreboard') && matchesTeams(strictTeamCheck)) {
                           crexUrl = 'https://crex.live' + href;
                       }
                   });
