@@ -212,7 +212,7 @@ module.exports = async function (req, res) {
               if (reqMatch) payload.required_rr = reqMatch[1];
           } catch(e) { payload.current_rr = "Error"; payload.required_rr = "Error"; }
 
-          // --- [TARGET #7] STRIKER EXTRACTION (SECURED) ---
+          // --- [TARGET #7] STRIKER EXTRACTION (SECURED & DOUBLE-STAR PATCHED) ---
           try {
               let foundStriker = "";
 
@@ -220,7 +220,7 @@ module.exports = async function (req, res) {
               let starMatch = bodyText.match(/([a-zA-Z\s\-\'\.]+?)\s*\*\s*\d+\s+\d+/);
               if (starMatch && starMatch[1]) {
                   let cleanName = starMatch[1].replace(/(Batter|SR|ECO|Runs|4s|6s)/gi, '').trim();
-                  cleanName = cleanName.replace(/^[a-z]+\s*/, '').trim(); // Fix sSR bug
+                  cleanName = cleanName.replace(/^[a-z]+\s*/, '').trim(); 
                   
                   if (cleanName.length > 2 && !cleanName.toLowerCase().includes('match')) {
                       foundStriker = cleanName + " *";
@@ -238,41 +238,47 @@ module.exports = async function (req, res) {
                   });
               }
 
+              // Double-Star Patch: Forcefully clean any ** anomalies
+              if (foundStriker) foundStriker = foundStriker.replace(/\s*\*+/g, ' *').trim();
+
               payload.striker = foundStriker || "Target Engaged";
           } catch(e) { payload.striker = "Extractor Error"; }
 
           // --- [TARGET #8] NON-STRIKER EXTRACTION (NEW FIX) ---
           try {
               let foundNonStriker = "";
-              let strikerNameRaw = payload.striker.replace('*', '').trim(); // Remove star to compare names cleanly
+              let strikerNameRaw = payload.striker.replace(/\*/g, '').trim(); // Remove star to compare cleanly
 
               if ($) {
-                  let activeBatters = [];
-                  
-                  // Hunt through the Batting Rows
-                  $('.cb-min-bat-rw').each((i, el) => {
-                      let rowTxt = $(el).text().replace(/\s+/g, ' ').trim();
-                      
-                      // Priority 1: Clean Profile Links
-                      let profName = $(el).find('a[href*="/profiles/"]').first().text().trim();
-                      if (profName && profName.length > 2) {
-                          activeBatters.push(profName);
-                      } else {
-                          // Priority 2: String Cleaner Backup
-                          let cleanText = rowTxt.replace(/(Batter|SR|ECO|Runs|4s|6s)/gi, '').replace(/^[a-z]+\s*/i, '').trim();
-                          let nameMatch = cleanText.match(/^([a-zA-Z\s\-\'\.]+?)\s*(?:\*|\d)/);
-                          if (nameMatch && nameMatch[1].trim().length > 2) {
-                              activeBatters.push(nameMatch[1].trim());
-                          }
-                      }
+                  let allNames = [];
+                  $('a[href*="/profiles/"]').each((i, el) => {
+                      let name = $(el).text().trim();
+                      if (name.length > 2 && !allNames.includes(name)) allNames.push(name);
                   });
+                  
+                  // The live screen ALWAYS lists the 2 active batters first in the profile array
+                  if (allNames.length >= 2) {
+                      // Subtraction Protocol: If Striker is Name 1, Non-Striker is Name 2.
+                      if (strikerNameRaw.includes(allNames[0]) || allNames[0].includes(strikerNameRaw)) {
+                          foundNonStriker = allNames[1];
+                      } else {
+                          foundNonStriker = allNames[0]; 
+                      }
+                  }
+              }
 
-                  // The Subtraction Protocol
-                  for (let name of activeBatters) {
-                      // If the name is valid AND it isn't the Striker's name, it must be the Non-Striker
-                      if (name && name !== strikerNameRaw && !strikerNameRaw.includes(name)) {
-                          foundNonStriker = name;
-                          break;
+              // Text-Block Backup if HTML Profile Links are blocked by the site
+              if (!foundNonStriker) {
+                  let matchBlock = bodyText.match(/SR\s+(.+?)\s+Bowler/i);
+                  if (matchBlock) {
+                      let nameMatches = [...matchBlock[1].matchAll(/([a-zA-Z\s\-\'\.]+?)\s*(?:\*|\d{1,3}\s+\d{1,3})/g)];
+                      for (let m of nameMatches) {
+                          let possibleName = m[1].trim();
+                          // Find the name that IS NOT the Striker
+                          if (possibleName.length > 2 && !strikerNameRaw.includes(possibleName) && !possibleName.includes(strikerNameRaw)) {
+                              foundNonStriker = possibleName;
+                              break;
+                          }
                       }
                   }
               }
@@ -328,7 +334,6 @@ module.exports = async function (req, res) {
       }
 
       // --- [TARGET #14] SOURCE URL (SECURED) ---
-      // Handled natively during Phase 1 Acquisition
 
       return res.status(200).json({ success: true, match_info: payload });
 
