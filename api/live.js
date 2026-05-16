@@ -78,7 +78,6 @@ module.exports = async function (req, res) {
       // ==============================================================
       let htmlAcquired = false;
 
-      // --- TIER 1: CRICBUZZ ---
       if (!htmlAcquired) {
           try {
               let cbUrl = targetUrl;
@@ -113,7 +112,6 @@ module.exports = async function (req, res) {
           } catch (e) {}
       }
 
-      // --- TIER 2: ESPN JSON API ---
       if (!htmlAcquired) {
           try {
               const espnRes = await axios.get('https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current', { headers, timeout: 3000 });
@@ -140,25 +138,28 @@ module.exports = async function (req, res) {
       // PHASE 2: BATTLEFIELD ASSESSMENT (State Detection)
       // ==============================================================
       try {
-          // --- [BOX 0.1] TITLE EXTRACTION (FIXED FOR TARGET #1) ---
+          // --- [TARGET #1] TITLE EXTRACTION (SECURED) ---
           let vsMatch = pageTitle.match(/([a-zA-Z0-9\s]+?\s+vs\s+[a-zA-Z0-9\s]+)/i);
           if (vsMatch) {
               payload.title = vsMatch[1].replace(/live score/i, '').replace(/live/i, '').trim();
           } else if (targetTeams) {
-              payload.title = targetTeams.replace(/\b\w/g, l => l.toUpperCase()); // Formats "kkr vs gt" to "Kkr Vs Gt"
+              payload.title = targetTeams.replace(/\b\w/g, l => l.toUpperCase()); 
           } else {
               payload.title = pageTitle.split(/[,|]/)[0].trim() || "Live Cricket Match";
           }
 
+          // --- [TARGET #11] VENUE EXTRACTION (SECURED) ---
           let venueMatch = bodyText.match(/Venue\s*:\s*([^•|{]+)/i) || (espnMatchData && espnMatchData.ground ? [null, espnMatchData.ground.name] : null);
           if (venueMatch) payload.venue = venueMatch[1].trim();
 
+          // Base Status Pull
           let statusText = $ ? $('.cb-status-msg, .cb-text-complete, .ui-match-status').first().text().trim() : "";
           let titleWin = pageTitle.match(/([a-zA-Z\s\-]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
           if (!statusText && titleWin) statusText = titleWin[1].trim();
           else if (espnMatchData) statusText = espnMatchData.statusText;
           if (statusText) payload.status = statusText;
           
+          // --- [TARGET #3] MATCH STATE EXTRACTION (SECURED) ---
           let statusLower = (statusText || "").toLowerCase();
           if (statusLower.includes('won by') || statusLower.includes('tied') || statusLower.includes('abandoned')) {
               payload.match_state = "completed";
@@ -173,7 +174,7 @@ module.exports = async function (req, res) {
       // PHASE 3: ISOLATED EXTRACTION BOXES
       // ==============================================================
 
-      // [BOX 1] TOSS EXTRACTION
+      // --- [TARGET #10] TOSS EXTRACTION (SECURED) ---
       try {
           let tossMatch = bodyText.match(/([A-Z][a-zA-Z\s]+won the toss and (?:opted|elected|chose|decided) to (?:bat|bowl|field))/i);
           if (!tossMatch) tossMatch = bodyText.match(/Toss\s*:\s*([^•|{\(]+)/i);
@@ -185,14 +186,24 @@ module.exports = async function (req, res) {
       // --- LIVE STATE EXTRACTION ---
       if (payload.match_state === "live") {
           
-          // [BOX 2] LIVE SCORE
+          // --- [TARGET #2] STATUS REFINEMENT (NEW OVERRIDE) ---
+          try {
+              if (payload.status === "Scanning Fields..." || payload.status === "") {
+                  if (bodyText.match(/innings break/i)) payload.status = "Innings Break";
+                  else if (bodyText.match(/strategic timeout/i)) payload.status = "Strategic Timeout";
+                  else if (bodyText.match(/rain stop/i) || bodyText.match(/delay/i)) payload.status = "Weather/Delay Protocol";
+                  else payload.status = "Live Match Active";
+              }
+          } catch(e) { payload.status = "Status Error"; }
+
+          // --- [TARGET #4] LIVE SCORE (SECURED) ---
           try {
               let scoreMatch = pageTitle.match(/([A-Z]{2,4}\s\d+\/\d+\s\([^)]+\))/);
               if (scoreMatch) payload.live_score = scoreMatch[1];
               else if (espnMatchData) payload.live_score = `${espnMatchData.teams[0].score || ''} vs ${espnMatchData.teams[1].score || ''}`;
           } catch(e) { payload.live_score = "Score Error"; }
 
-          // [BOX 3] RUN RATES
+          // --- [TARGET #5 & #6] RUN RATES (SECURED) ---
           try {
               let crrMatch = bodyText.match(/CRR:\s*([\d\.]+)/i);
               if (crrMatch) payload.current_rr = crrMatch[1];
@@ -200,7 +211,7 @@ module.exports = async function (req, res) {
               if (reqMatch) payload.required_rr = reqMatch[1];
           } catch(e) { payload.current_rr = "Error"; payload.required_rr = "Error"; }
 
-          // [BOX 4] STRIKER & NON-STRIKER
+          // --- [TARGET #7 & #8] STRIKER & NON-STRIKER (PENDING FIX) ---
           try {
               payload.striker = "Target Engaged";
               payload.non_striker = "Off-Strike";
@@ -212,7 +223,7 @@ module.exports = async function (req, res) {
                       if (rowText.includes('SR ')) cleanText = rowText.split('SR ')[1];
                       else if (rowText.includes('SR')) cleanText = rowText.split('SR')[1];
                       
-                      let namePart = cleanText.split(/\d/)[0].trim(); // Extract name before runs digit
+                      let namePart = cleanText.split(/\d/)[0].trim(); 
                       if (namePart.length > 2 && !namePart.toLowerCase().includes('batter')) {
                           if (rowText.substring(0, namePart.length + 3).includes('*')) namePart += ' *';
                           batters.push(namePart);
@@ -229,7 +240,7 @@ module.exports = async function (req, res) {
               }
           } catch(e) { payload.striker = "Extractor Error"; payload.non_striker = "Extractor Error"; }
 
-          // [BOX 5] BOWLER
+          // --- [TARGET #9] BOWLER (PENDING FIX) ---
           try {
               payload.bowler = "Active Bowler";
               if ($) {
@@ -240,21 +251,21 @@ module.exports = async function (req, res) {
                       if (rowText.includes('ECO ')) cleanText = rowText.split('ECO ')[1];
                       else if (rowText.includes('ECO')) cleanText = rowText.split('ECO')[1];
                       
-                      let namePart = cleanText.split(/\d/)[0].trim(); // Extract name before overs digit
+                      let namePart = cleanText.split(/\d/)[0].trim(); 
                       if (namePart.length > 2 && !namePart.toLowerCase().includes('bowler')) bowlers.push(namePart);
                   });
                   if (bowlers[0]) payload.bowler = bowlers[0];
               }
           } catch(e) { payload.bowler = "Extractor Error"; }
 
-          // [BOX 6] LAST OVER BALLS
+          // --- [TARGET #12] LAST OVER BALLS (SECURED) ---
           try {
               let recentTextMatch = bodyText.match(/Recent\s*:\s*([W0-9NbLwd|\s]+)/i);
               if (recentTextMatch) payload.last_over = recentTextMatch[1].split(/[|\s]+/).filter(b => b.trim()).slice(-6);
               else payload.last_over = ["-", "-", "-", "-", "-", "-"];
           } catch(e) { payload.last_over = ["E", "R", "R", "O", "R", "!"]; }
 
-          // [BOX 7] PREDICTION
+          // --- [TARGET #13] PREDICTION (SECURED) ---
           try {
               if (payload.required_rr !== "YAHOO: No REQ" && payload.required_rr !== "Error") payload.prediction = "TRACKING CHASE PROBABILITY...";
               else if (payload.current_rr !== "YAHOO: No CRR" && payload.current_rr !== "Error") payload.prediction = `PROJECTED TARGET: ${Math.floor(parseFloat(payload.current_rr) * 20)} RUNS`;
@@ -288,6 +299,9 @@ module.exports = async function (req, res) {
           if (payload.toss === "Tracking Toss Data..." || payload.toss.includes("YAHOO")) payload.toss = "Awaiting Coin Drop";
           if (payload.toss !== "Awaiting Coin Drop") payload.status = payload.toss;
       }
+
+      // --- [TARGET #14] SOURCE URL (SECURED) ---
+      // Handled natively during Phase 1 Acquisition
 
       return res.status(200).json({ success: true, match_info: payload });
 
