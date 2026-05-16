@@ -21,12 +21,10 @@ module.exports = async function (req, res) {
   // ==============================================================
   // 0. STRICT TEMPORAL LOCKDOWN (Current Day Only)
   // ==============================================================
-  // Get the current date in Indian Standard Time (e.g., "may 16")
   let now = new Date();
   let options = { timeZone: 'Asia/Kolkata', month: 'short', day: 'numeric' };
   let todayIST = now.toLocaleString('en-US', options).toLowerCase();
   
-  // If the user selects a date that is NOT today, abort immediately.
   if (targetDate && targetDate !== todayIST) {
       let lockdownPayload = {
           title: "UPLINK DENIED",
@@ -215,13 +213,17 @@ module.exports = async function (req, res) {
       payload.match_state = state;
 
       // ==============================================================
-      // PHASE 3: TIMELINE-SPECIFIC DATA EXTRACTION 
+      // PHASE 3: TIMELINE-SPECIFIC DATA EXTRACTION (PATCHED)
       // ==============================================================
-      let tossMatch = bodyText.match(/([A-Z][a-z]+\s[A-Za-z]+\swon the toss and (?:opted|elected|chose) to (?:bat|bowl) first)/i);
+      
+      // BROADENED TOSS REGEX: Handles "elected to field", "opted to bat", or "Toss:" prefix
+      let tossMatch = bodyText.match(/([a-zA-Z\s]+won the toss and (?:opted|elected|chose|decided) to [a-zA-Z\s]+)/i);
+      if (!tossMatch) tossMatch = bodyText.match(/Toss\s*:\s*([^•|{]+)/i);
+      
       if (tossMatch) payload.toss = tossMatch[1].trim();
       else if (espnMatchData && espnMatchData.tossResults) payload.toss = espnMatchData.tossResults.text;
 
-      // --- ROUTE A: COMPLETED MATCH (Should rarely hit now, but safe fallback) ---
+      // --- ROUTE A: COMPLETED MATCH ---
       if (state === "completed") {
           payload.status = statusText || "Match Concluded";
           
@@ -256,18 +258,22 @@ module.exports = async function (req, res) {
           if (espnMatchData && payload.source_url === "ESPN-API-Uplink") {
               payload.striker = "Tracking via API..."; payload.bowler = "Tracking via API...";
           } else {
+             // FALLBACK ARMORED
              payload.striker = "Live Target Engaged"; payload.bowler = "Live Target Engaged";
              
              if ($) {
                  let batsmen = [];
-                 $('.cb-min-inf').each((i, el) => {
+                 // PATCH: Only targets the anchor links to extract clean names
+                 $('.cb-min-bat-rw a, .cb-min-inf a').each((i, el) => {
                      let text = $(el).text().trim();
-                     if (text && !text.includes('CRR')) batsmen.push(text);
+                     if (text) batsmen.push(text);
                  });
                  if (batsmen[0]) payload.striker = batsmen[0];
                  if (batsmen[1]) payload.non_striker = batsmen[1];
 
-                 let cbBowler = $('.cb-min-bowl-rw').find('a').first().text().trim();
+                 // PATCH: Only targets the anchor link for the bowler
+                 let cbBowler = $('.cb-min-bowl-rw a').first().text().trim();
+                 if (!cbBowler) cbBowler = $('.cb-min-bowl-rw').text().replace(/[\d\.\-]+/g, '').trim(); // Regex cleanup if no link
                  if (cbBowler) payload.bowler = cbBowler;
              }
           }
@@ -280,7 +286,7 @@ module.exports = async function (req, res) {
           else if (payload.current_rr !== "YAHOO: No CRR") payload.prediction = `PROJECTED TARGET: ${Math.floor(parseFloat(payload.current_rr) * 20)} RUNS`;
       } 
       
-      // --- ROUTE C: FUTURE MATCH (Later today) ---
+      // --- ROUTE C: FUTURE MATCH ---
       else if (state === "future") {
           payload.live_score = "Match Not Started";
           payload.striker = "Waiting for Openers"; payload.non_striker = "Waiting for Openers";
