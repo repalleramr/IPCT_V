@@ -17,8 +17,31 @@ module.exports = async function (req, res) {
   let rawDateStr = req.query.time || ""; 
   
   let targetDate = rawDateStr.split('(')[0].trim().toLowerCase();
-  let targetMonth = targetDate.split(' ')[0] || "";
-  let targetDay = targetDate.split(' ')[1] || ""; 
+  
+  // ==============================================================
+  // 0. STRICT TEMPORAL LOCKDOWN (Current Day Only)
+  // ==============================================================
+  // Get the current date in Indian Standard Time (e.g., "may 16")
+  let now = new Date();
+  let options = { timeZone: 'Asia/Kolkata', month: 'short', day: 'numeric' };
+  let todayIST = now.toLocaleString('en-US', options).toLowerCase();
+  
+  // If the user selects a date that is NOT today, abort immediately.
+  if (targetDate && targetDate !== todayIST) {
+      let lockdownPayload = {
+          title: "UPLINK DENIED",
+          status: "Select today match only",
+          match_state: "standby",
+          live_score: "Out of Bounds",
+          current_rr: "N/A", required_rr: "N/A",
+          striker: "N/A", non_striker: "N/A", bowler: "N/A",
+          toss: "N/A", venue: "Temporal Lock Active",
+          last_over: ["-", "-", "-", "-", "-", "-"],
+          prediction: "Select today match only",
+          source_url: "Rejected by Firewall"
+      };
+      return res.status(200).json({ success: false, error: "Temporal mismatch", match_info: lockdownPayload });
+  }
 
   const headers = { 'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36' };
 
@@ -36,7 +59,7 @@ module.exports = async function (req, res) {
   let $ = null; 
 
   // ==============================================================
-  // 0. THE ALIAS ENGINE 
+  // 1. THE ALIAS ENGINE 
   // ==============================================================
   const teamAliases = {
       "chennai": ["csk", "chennai", "super kings"], "lucknow": ["lsg", "lucknow", "super giants"],
@@ -60,7 +83,7 @@ module.exports = async function (req, res) {
 
   try {
       // ==============================================================
-      // PHASE 1: TEMPORAL DATA ACQUISITION 
+      // PHASE 1: LIVE DATA ACQUISITION 
       // ==============================================================
       let htmlAcquired = false;
 
@@ -70,13 +93,12 @@ module.exports = async function (req, res) {
               let cbUrl = targetUrl;
               if (!cbUrl && targetTeams) {
                   const searchDirs = [
-                      { url: 'https://m.cricbuzz.com/cricket-match/live-scores', checkDate: false },
-                      { url: 'https://m.cricbuzz.com/cricket-match/live-scores/recent', checkDate: true },
-                      { url: 'https://m.cricbuzz.com/cricket-match/live-scores/upcoming', checkDate: false }
+                      'https://m.cricbuzz.com/cricket-match/live-scores',
+                      'https://m.cricbuzz.com/cricket-match/live-scores/upcoming'
                   ];
                   
                   for (let dir of searchDirs) {
-                      const res = await axios.get(dir.url, { headers, timeout: 3000 });
+                      const res = await axios.get(dir, { headers, timeout: 3000 });
                       const $temp = cheerio.load(res.data);
                       $temp('a').each((i, el) => {
                           let txt = $temp(el).text().toLowerCase();
@@ -86,12 +108,6 @@ module.exports = async function (req, res) {
                           let isIPL = href.includes('indian-premier-league') || parentTxt.includes('ipl');
                           let hasMatchId = href.match(/\/\d{4,}\//); 
                           
-                          let isDateMatch = true;
-                          if (dir.checkDate && targetDate) {
-                              isDateMatch = txt.includes(targetMonth) || parentTxt.includes(targetMonth) || txt.includes('yesterday') || parentTxt.includes('yesterday');
-                          }
-                          
-                          // STRICT SCOPE FIX: Only check the link text and the URL slug for teams, NEVER the parent container!
                           let strictTeamCheck = txt + " " + href; 
 
                           if (isIPL && hasMatchId && matchesTeams(strictTeamCheck) && href.includes('scores')) {
@@ -146,29 +162,12 @@ module.exports = async function (req, res) {
       // --- TIER 3: ESPN JSON API ---
       if (!htmlAcquired) {
           try {
-              const espnEndpoints = [
-                  'https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current',
-                  'https://hs-consumer-api.espncricinfo.com/v1/pages/matches/recent',
-                  'https://hs-consumer-api.espncricinfo.com/v1/pages/matches/schedule'
-              ];
-              for (let url of espnEndpoints) {
-                  const espnRes = await axios.get(url, { headers, timeout: 3000 });
-                  espnMatchData = espnRes.data.matches.find(m => {
-                      let isIPL = (m.series?.name?.toLowerCase().includes('ipl') || m.title.toLowerCase().includes('ipl'));
-                      let hasTeam = matchesTeams(m.title.toLowerCase() + " " + m.teams.map(t => t.team.abbreviation).join(" ").toLowerCase());
-                      
-                      let isDateMatch = true;
-                      if (targetDate && m.startTime) {
-                           let mDate = new Date(m.startTime);
-                           let options = { timeZone: 'Asia/Kolkata', month: 'short', day: 'numeric' };
-                           let mDateStr = mDate.toLocaleString('en-US', options).toLowerCase();
-                           isDateMatch = (mDateStr === targetDate || (targetDay && mDateStr.includes(targetDay)));
-                      }
-
-                      return isIPL && hasTeam && isDateMatch;
-                  });
-                  if (espnMatchData) break;
-              }
+              const espnRes = await axios.get('https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current', { headers, timeout: 3000 });
+              espnMatchData = espnRes.data.matches.find(m => {
+                  let isIPL = (m.series?.name?.toLowerCase().includes('ipl') || m.title.toLowerCase().includes('ipl'));
+                  let hasTeam = matchesTeams(m.title.toLowerCase() + " " + m.teams.map(t => t.team.abbreviation).join(" ").toLowerCase());
+                  return isIPL && hasTeam;
+              });
               
               if (espnMatchData) {
                   pageTitle = espnMatchData.title;
@@ -180,7 +179,7 @@ module.exports = async function (req, res) {
       }
 
       if (!htmlAcquired) {
-          payload.status = "YAHOO: IPL 2026 Match Not Found for Target Date";
+          payload.status = "YAHOO: Today's IPL Match Not Found";
           payload.title = "UPLINK FAILED";
           return res.status(200).json({ success: true, match_info: payload }); 
       }
@@ -222,7 +221,7 @@ module.exports = async function (req, res) {
       if (tossMatch) payload.toss = tossMatch[1].trim();
       else if (espnMatchData && espnMatchData.tossResults) payload.toss = espnMatchData.tossResults.text;
 
-      // --- ROUTE A: COMPLETED MATCH ---
+      // --- ROUTE A: COMPLETED MATCH (Should rarely hit now, but safe fallback) ---
       if (state === "completed") {
           payload.status = statusText || "Match Concluded";
           
@@ -281,7 +280,7 @@ module.exports = async function (req, res) {
           else if (payload.current_rr !== "YAHOO: No CRR") payload.prediction = `PROJECTED TARGET: ${Math.floor(parseFloat(payload.current_rr) * 20)} RUNS`;
       } 
       
-      // --- ROUTE C: FUTURE MATCH ---
+      // --- ROUTE C: FUTURE MATCH (Later today) ---
       else if (state === "future") {
           payload.live_score = "Match Not Started";
           payload.striker = "Waiting for Openers"; payload.non_striker = "Waiting for Openers";
