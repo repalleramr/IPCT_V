@@ -12,8 +12,10 @@ module.exports = async function (req, res) {
   let targetTeams = (req.query.teams || "").toLowerCase().trim();
   let rawDateStr = req.query.time || ""; 
   
+  // FIXED: Restored complete temporal variable extraction
   let targetDate = rawDateStr.split('(')[0].trim().toLowerCase();
   let targetMonth = targetDate.split(' ')[0] || "";
+  let targetDay = targetDate.split(' ')[1] || ""; 
 
   const headers = { 'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36' };
 
@@ -64,13 +66,13 @@ module.exports = async function (req, res) {
               let cbUrl = targetUrl;
               if (!cbUrl && targetTeams) {
                   const searchDirs = [
-                      'https://m.cricbuzz.com/cricket-match/live-scores',
-                      'https://m.cricbuzz.com/cricket-match/live-scores/recent',
-                      'https://m.cricbuzz.com/cricket-match/live-scores/upcoming'
+                      { url: 'https://m.cricbuzz.com/cricket-match/live-scores', checkDate: false },
+                      { url: 'https://m.cricbuzz.com/cricket-match/live-scores/recent', checkDate: true },
+                      { url: 'https://m.cricbuzz.com/cricket-match/live-scores/upcoming', checkDate: false }
                   ];
                   
                   for (let dir of searchDirs) {
-                      const res = await axios.get(dir, { headers, timeout: 2500 });
+                      const res = await axios.get(dir.url, { headers, timeout: 3000 });
                       const $ = cheerio.load(res.data);
                       $('a').each((i, el) => {
                           let txt = $(el).text().toLowerCase();
@@ -78,8 +80,12 @@ module.exports = async function (req, res) {
                           let parentTxt = $(el).parent().parent().text().toLowerCase();
                           
                           let isIPL = href.includes('indian-premier-league') || parentTxt.includes('ipl');
-                          // Match ID Lock: Ensure we only grab actual match links, not directories
                           let hasMatchId = href.match(/\/\d{4,}\//); 
+                          
+                          let isDateMatch = true;
+                          if (dir.checkDate && targetDate) {
+                              isDateMatch = txt.includes(targetMonth) || parentTxt.includes(targetMonth) || txt.includes('yesterday') || parentTxt.includes('yesterday');
+                          }
                           
                           if (isIPL && hasMatchId && matchesTeams(txt + " " + parentTxt) && href.includes('scores')) {
                               cbUrl = 'https://m.cricbuzz.com' + href;
@@ -90,7 +96,7 @@ module.exports = async function (req, res) {
               }
               if (cbUrl) {
                   cbUrl = cbUrl.replace('www.', 'm.').replace('/live-cricket-scorecard/', '/cricket-scores/');
-                  const cbRes = await axios.get(cbUrl, { headers, timeout: 3500 });
+                  const cbRes = await axios.get(cbUrl, { headers, timeout: 4000 });
                   const $ = cheerio.load(cbRes.data);
                   $('script, style, noscript').remove();
                   pageTitle = $('title').text() || "";
@@ -98,7 +104,7 @@ module.exports = async function (req, res) {
                   payload.source_url = cbUrl;
                   htmlAcquired = true;
               }
-          } catch (e) { /* Pivot */ }
+          } catch (e) { /* Pivot to CREX */ }
       }
 
       // --- TIER 2: CREX ---
@@ -111,7 +117,6 @@ module.exports = async function (req, res) {
                   $cx('a').each((i, el) => {
                       let txt = $cx(el).text().toLowerCase();
                       let href = $cx(el).attr('href') || "";
-                      
                       if ((txt.includes('ipl') || txt.includes('indian premier league')) && href.includes('scoreboard') && matchesTeams(txt)) {
                           crexUrl = 'https://crex.live' + href;
                       }
@@ -126,7 +131,7 @@ module.exports = async function (req, res) {
                   payload.source_url = crexUrl;
                   htmlAcquired = true;
               }
-          } catch (e) { /* Pivot */ }
+          } catch (e) { /* Pivot to ESPN */ }
       }
 
       // --- TIER 3: ESPN JSON API ---
@@ -142,7 +147,17 @@ module.exports = async function (req, res) {
                   espnMatchData = espnRes.data.matches.find(m => {
                       let isIPL = (m.series?.name?.toLowerCase().includes('ipl') || m.title.toLowerCase().includes('ipl'));
                       let hasTeam = matchesTeams(m.title.toLowerCase() + " " + m.teams.map(t => t.team.abbreviation).join(" ").toLowerCase());
-                      return isIPL && hasTeam;
+                      
+                      // Safe check against restored targetDay
+                      let isDateMatch = true;
+                      if (targetDate && m.startTime) {
+                           let mDate = new Date(m.startTime);
+                           let options = { timeZone: 'Asia/Kolkata', month: 'short', day: 'numeric' };
+                           let mDateStr = mDate.toLocaleString('en-US', options).toLowerCase();
+                           isDateMatch = (mDateStr === targetDate || (targetDay && mDateStr.includes(targetDay)));
+                      }
+
+                      return isIPL && hasTeam && isDateMatch;
                   });
                   if (espnMatchData) break;
               }
@@ -169,7 +184,6 @@ module.exports = async function (req, res) {
       let venueMatch = bodyText.match(/Venue\s*:\s*([^•|{]+)/i) || (espnMatchData && espnMatchData.ground ? [null, espnMatchData.ground.name] : null);
       if (venueMatch) payload.venue = venueMatch[1].trim();
 
-      // STRICT STATE FORENSICS (No bodyText searching for "won by")
       let statusText = $('.cb-status-msg, .cb-text-complete, .ui-match-status').first().text().trim();
       let titleWin = pageTitle.match(/([a-zA-Z\s\-]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
       
@@ -200,7 +214,6 @@ module.exports = async function (req, res) {
       if (state === "completed") {
           payload.status = statusText || "Match Concluded";
           
-          // Split title to capture BOTH teams safely (e.g. "IPL | RCB 194/4 (19.1) vs KKR 192/4 | ...")
           let rawTitleArray = pageTitle.split('|');
           if (rawTitleArray.length > 1) {
               payload.live_score = rawTitleArray[1].replace(/-\s*Live.*?Score/i, '').trim();
@@ -212,7 +225,6 @@ module.exports = async function (req, res) {
           payload.bowler = "Match Ended"; payload.current_rr = "Match Ended";
           payload.required_rr = "Match Ended"; payload.last_over = ["E", "N", "D", "E", "D", "!"];
           
-          // Clean POTM Extraction (Stops at "Match" or "Videos")
           let potmMatch = bodyText.match(/player of the match\s*([a-zA-Z\s]+?)(?:match\svideos|view\sall|share|$)/i);
           payload.prediction = potmMatch ? `POTM: ${potmMatch[1].trim()}` : "Match Ended";
           
