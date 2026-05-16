@@ -81,7 +81,7 @@ module.exports = async function (req, res) {
 
   try {
       // ==============================================================
-      // PHASE 1: LIVE DATA ACQUISITION (DO NOT TOUCH)
+      // PHASE 1: LIVE DATA ACQUISITION
       // ==============================================================
       let htmlAcquired = false;
 
@@ -203,13 +203,20 @@ module.exports = async function (req, res) {
       payload.match_state = state;
 
       // ==============================================================
-      // PHASE 3: TIMELINE-SPECIFIC DATA EXTRACTION 
+      // PHASE 3: TIMELINE-SPECIFIC DATA EXTRACTION (PATCHED)
       // ==============================================================
-      let tossMatch = bodyText.match(/([A-Z][a-z]+\s[A-Za-z]+\swon the toss and (?:opted|elected|chose|decided) to (?:bat|bowl) first)/i);
-      if (!tossMatch) tossMatch = bodyText.match(/Toss\s*:\s*([^•|{]+)/i);
-
-      if (tossMatch) payload.toss = tossMatch[1].trim();
-      else if (espnMatchData && espnMatchData.tossResults) payload.toss = espnMatchData.tossResults.text;
+      
+      // Strict Toss Extraction (Avoids Garbage Leak)
+      let tossMatch = bodyText.match(/([A-Z][a-zA-Z\s]+won the toss and (?:opted|elected|chose|decided) to (?:bat|bowl|field))/i);
+      if (tossMatch) {
+          payload.toss = tossMatch[1].trim();
+      } else {
+          let altToss = bodyText.match(/Toss\s*:\s*([^•|{\(]+)/i); // Stops at bullets or brackets
+          if (altToss) payload.toss = altToss[1].trim();
+      }
+      
+      // Toss Firewall: If regex grabbed UI garbage, wipe it for Phase 4 to fix
+      if (payload.toss.length > 50) payload.toss = "Tracking Toss Data...";
 
       if (state === "completed") {
           payload.status = statusText || "Match Concluded";
@@ -222,7 +229,7 @@ module.exports = async function (req, res) {
           payload.required_rr = "Match Ended"; payload.last_over = ["E", "N", "D", "E", "D", "!"];
           let potmMatch = bodyText.match(/player of the match\s*([a-zA-Z\s]+?)(?:match\svideos|view\sall|share|$)/i);
           payload.prediction = potmMatch ? `POTM: ${potmMatch[1].trim()}` : "Match Ended";
-          if (payload.toss === "YAHOO: No Toss Data") payload.toss = "Toss Record Unavailable";
+          if (payload.toss === "Tracking Toss Data...") payload.toss = "Toss Record Unavailable";
       } 
       else if (state === "live") {
           let scoreMatch = pageTitle.match(/([A-Z]{2,4}\s\d+\/\d+\s\([^)]+\))/);
@@ -234,24 +241,9 @@ module.exports = async function (req, res) {
           let reqMatch = bodyText.match(/REQ:\s*([\d\.]+)/i);
           if (reqMatch) payload.required_rr = reqMatch[1];
 
-          if ($) {
-              let batterTexts = [];
-              $('.cb-min-bat-rw').each((i, el) => {
-                  let txt = $(el).text().trim();
-                  let nameMatch = txt.match(/^([a-zA-Z\s\-\']+)/); 
-                  if (nameMatch && nameMatch[1].length > 2 && !nameMatch[1].toLowerCase().includes('batter')) {
-                      batterTexts.push(nameMatch[1].trim());
-                  }
-              });
-              if (batterTexts[0]) payload.striker = batterTexts[0];
-              if (batterTexts[1]) payload.non_striker = batterTexts[1];
-
-              let bowlTxt = $('.cb-min-bowl-rw').first().text().trim();
-              let bowlMatch = bowlTxt.match(/^([a-zA-Z\s\-\']+)/);
-              if (bowlMatch && bowlMatch[1].length > 2 && !bowlMatch[1].toLowerCase().includes('bowler')) {
-                  payload.bowler = bowlMatch[1].trim();
-              }
-          }
+          // Initialize with placeholders so Phase 4 Patcher knows to engage
+          payload.striker = "Live Target Engaged"; 
+          payload.bowler = "Live Target Engaged";
 
           let recentTextMatch = bodyText.match(/Recent\s*:\s*([W0-9NbLwd|\s]+)/i);
           if (recentTextMatch) payload.last_over = recentTextMatch[1].split(/[|\s]+/).filter(b => b.trim()).slice(-6);
@@ -268,33 +260,51 @@ module.exports = async function (req, res) {
           let matchDate = bodyText.match(/Date\s*:\s*([^•|{]+)/i);
           if (matchDate) payload.status = `Starts: ${matchDate[1].trim()}`;
           else if (espnMatchData) payload.status = "Pre-Match Standby";
-          if (payload.toss === "YAHOO: No Toss Data") payload.toss = "Awaiting Coin Drop";
+          if (payload.toss === "Tracking Toss Data..." || payload.toss.includes("YAHOO")) payload.toss = "Awaiting Coin Drop";
           if (payload.toss !== "Awaiting Coin Drop") payload.status = payload.toss;
       }
 
       // ==============================================================
-      // PHASE 4: CROSS-SITE PLAYER PATCHER (Only fires if players are missing)
+      // PHASE 4: CROSS-SITE PLAYER PATCHER (Ultimate Fallback)
       // ==============================================================
-      if (payload.match_state === "live" && (!payload.striker || payload.striker.includes("YAHOO") || payload.striker.length < 2)) {
-          try {
-              // Stealth Ping to the Live Directory Feed to steal player names from the summary snippet
-              const patchRes = await axios.get('https://m.cricbuzz.com/cricket-match/live-scores', { headers, timeout: 2500 });
-              const $patch = cheerio.load(patchRes.data);
-              $patch('a').each((i, el) => {
-                  let txt = $patch(el).text().replace(/\s+/g, ' ').trim();
-                  let href = $patch(el).attr('href') || "";
-                  if (href.includes('scores') && matchesTeams(txt)) {
-                      // Splits the summary string: "Score • Striker Name 50* • Bowler Name 2/20"
-                      let bulletParts = txt.split('•');
-                      if (bulletParts.length >= 3) {
-                          payload.striker = bulletParts[1].replace(/[\d\.\*\(\)]+/g, '').trim() || "Active Striker";
-                          payload.bowler = bulletParts[2].replace(/[\d\.\*\(\)\/]+/g, '').trim() || "Active Bowler";
-                          payload.non_striker = "Off-Strike"; // Secondary player hidden in summaries
+      if (payload.match_state === "live") {
+          
+          // Step A: The "Bat Symbol" Regex Extractor 
+          let batSymbolMatch = bodyText.match(/([A-Za-z\s\-\']+)\s*\*/);
+          if (batSymbolMatch && batSymbolMatch[1].trim().length > 2 && !batSymbolMatch[1].toLowerCase().includes('match')) {
+              payload.striker = batSymbolMatch[1].trim() + " *";
+              payload.non_striker = "Active Non-Striker";
+              payload.bowler = "Active Bowler";
+          }
+
+          // Step B: Stealth ESPN Ping (If Bat Symbol failed or Bowler is missing)
+          if (payload.striker.includes("Target Engaged") || payload.bowler.includes("Active Bowler")) {
+              try {
+                  const espnRes = await axios.get('https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current', { headers, timeout: 2500 });
+                  let eMatch = espnRes.data.matches.find(m => {
+                      let isIPL = (m.series?.name?.toLowerCase().includes('ipl') || m.title.toLowerCase().includes('ipl'));
+                      let hasTeam = matchesTeams(m.title.toLowerCase() + " " + m.teams.map(t => t.team.abbreviation).join(" ").toLowerCase());
+                      return isIPL && hasTeam;
+                  });
+                  
+                  if (eMatch && eMatch.liveInning) {
+                      let inning = eMatch.liveInning;
+                      
+                      // Map JSON Arrays directly into the payload
+                      if (inning.batsmen && inning.batsmen.length > 0) {
+                          payload.striker = inning.batsmen.find(b => b.isStriker)?.athlete?.name || inning.batsmen[0]?.athlete?.name || payload.striker;
+                          payload.non_striker = inning.batsmen.find(b => !b.isStriker)?.athlete?.name || inning.batsmen[1]?.athlete?.name || "Off-Strike";
+                      }
+                      if (inning.bowlers && inning.bowlers.length > 0) {
+                          payload.bowler = inning.bowlers[0]?.athlete?.name || payload.bowler;
                       }
                   }
-              });
-          } catch(e) {
-              // Fails silently, does not crash your score or toss data
+                  
+                  // Secondary Toss Armor
+                  if (payload.toss === "Tracking Toss Data..." && eMatch && eMatch.tossResults) {
+                      payload.toss = eMatch.tossResults.text;
+                  }
+              } catch(e) {}
           }
       }
 
