@@ -78,7 +78,6 @@ module.exports = async function (req, res) {
       // ==============================================================
       let htmlAcquired = false;
 
-      // --- TIER 1: CRICBUZZ ---
       if (!htmlAcquired) {
           try {
               let cbUrl = targetUrl;
@@ -113,7 +112,6 @@ module.exports = async function (req, res) {
           } catch (e) {}
       }
 
-      // --- TIER 2: ESPN JSON API ---
       if (!htmlAcquired) {
           try {
               const espnRes = await axios.get('https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current', { headers, timeout: 3000 });
@@ -140,7 +138,6 @@ module.exports = async function (req, res) {
       // PHASE 2: BATTLEFIELD ASSESSMENT (State Detection)
       // ==============================================================
       try {
-          // --- [TARGET #1] TITLE EXTRACTION (SECURED) ---
           let vsMatch = pageTitle.match(/([a-zA-Z0-9\s]+?\s+vs\s+[a-zA-Z0-9\s]+)/i);
           if (vsMatch) {
               payload.title = vsMatch[1].replace(/live score/i, '').replace(/live/i, '').trim();
@@ -150,7 +147,6 @@ module.exports = async function (req, res) {
               payload.title = pageTitle.split(/[,|]/)[0].trim() || "Live Cricket Match";
           }
 
-          // --- [TARGET #11] VENUE EXTRACTION (SECURED) ---
           let venueMatch = bodyText.match(/Venue\s*:\s*([^•|{]+)/i) || (espnMatchData && espnMatchData.ground ? [null, espnMatchData.ground.name] : null);
           if (venueMatch) payload.venue = venueMatch[1].trim();
 
@@ -160,7 +156,6 @@ module.exports = async function (req, res) {
           else if (espnMatchData) statusText = espnMatchData.statusText;
           if (statusText) payload.status = statusText;
           
-          // --- [TARGET #3] MATCH STATE EXTRACTION (SECURED) ---
           let statusLower = (statusText || "").toLowerCase();
           if (statusLower.includes('won by') || statusLower.includes('tied') || statusLower.includes('abandoned')) {
               payload.match_state = "completed";
@@ -175,7 +170,6 @@ module.exports = async function (req, res) {
       // PHASE 3: ISOLATED EXTRACTION BOXES
       // ==============================================================
 
-      // --- [TARGET #10] TOSS EXTRACTION (SECURED) ---
       try {
           let tossMatch = bodyText.match(/([A-Z][a-zA-Z\s]+won the toss and (?:opted|elected|chose|decided) to (?:bat|bowl|field))/i);
           if (!tossMatch) tossMatch = bodyText.match(/Toss\s*:\s*([^•|{\(]+)/i);
@@ -187,7 +181,6 @@ module.exports = async function (req, res) {
       // --- LIVE STATE EXTRACTION ---
       if (payload.match_state === "live") {
           
-          // --- [TARGET #2] STATUS REFINEMENT (SECURED) ---
           try {
               if (payload.status === "Scanning Fields..." || payload.status === "") {
                   if (bodyText.match(/innings break/i)) payload.status = "Innings Break";
@@ -197,47 +190,38 @@ module.exports = async function (req, res) {
               }
           } catch(e) { payload.status = "Status Error"; }
 
-          // --- [TARGET #4] LIVE SCORE (SECURED) ---
           try {
               let scoreMatch = pageTitle.match(/([A-Z]{2,4}\s\d+\/\d+\s\([^)]+\))/);
               if (scoreMatch) payload.live_score = scoreMatch[1];
               else if (espnMatchData) payload.live_score = `${espnMatchData.teams[0].score || ''} vs ${espnMatchData.teams[1].score || ''}`;
           } catch(e) { payload.live_score = "Score Error"; }
 
-          // --- [TARGET #5 & #6] RUN RATES (NEW FIX FOR TARGET #6) ---
           try {
               let crrMatch = bodyText.match(/CRR:\s*([\d\.]+)/i);
               if (crrMatch) payload.current_rr = crrMatch[1];
               
-              // Tactic A: Aggressive Multi-Regex for Required Run Rate
               let reqMatch = bodyText.match(/(?:REQ|RRR|Req RR)\s*[:-]?\s*([\d\.]+)/i);
               if (reqMatch) {
                   payload.required_rr = reqMatch[1];
               } else {
-                  // Tactic B: ESPN JSON Stealth Backup
                   if (espnMatchData && espnMatchData.liveInning && espnMatchData.liveInning.requiredRunRate) {
                       payload.required_rr = espnMatchData.liveInning.requiredRunRate.toString();
                   } else {
-                      // Tactic C: Graceful 1st Innings Fallback
                       payload.required_rr = "1st Innings";
                   }
               }
           } catch(e) { payload.current_rr = "Error"; payload.required_rr = "Error"; }
 
-          // --- [TARGET #7] STRIKER EXTRACTION (SECURED) ---
           try {
               let foundStriker = "";
-
               let starMatch = bodyText.match(/([a-zA-Z\s\-\'\.]+?)\s*\*\s*\d+\s+\d+/);
               if (starMatch && starMatch[1]) {
                   let cleanName = starMatch[1].replace(/(Batter|SR|ECO|Runs|4s|6s)/gi, '').trim();
                   cleanName = cleanName.replace(/^[a-z]+\s*/, '').trim(); 
-                  
                   if (cleanName.length > 2 && !cleanName.toLowerCase().includes('match')) {
                       foundStriker = cleanName + " *";
                   }
               }
-
               if (!foundStriker && $) {
                   $('a[href*="/profiles/"]').each((i, el) => {
                       let name = $(el).text().trim();
@@ -247,33 +231,24 @@ module.exports = async function (req, res) {
                       }
                   });
               }
-
               if (foundStriker) foundStriker = foundStriker.replace(/\s*\*+/g, ' *').trim();
-
               payload.striker = foundStriker || "Target Engaged";
           } catch(e) { payload.striker = "Extractor Error"; }
 
-          // --- [TARGET #8] NON-STRIKER EXTRACTION (SECURED) ---
           try {
               let foundNonStriker = "";
               let strikerNameRaw = payload.striker.replace(/\*/g, '').trim(); 
-
               if ($) {
                   let allNames = [];
                   $('a[href*="/profiles/"]').each((i, el) => {
                       let name = $(el).text().trim();
                       if (name.length > 2 && !allNames.includes(name)) allNames.push(name);
                   });
-                  
                   if (allNames.length >= 2) {
-                      if (strikerNameRaw.includes(allNames[0]) || allNames[0].includes(strikerNameRaw)) {
-                          foundNonStriker = allNames[1];
-                      } else {
-                          foundNonStriker = allNames[0]; 
-                      }
+                      if (strikerNameRaw.includes(allNames[0]) || allNames[0].includes(strikerNameRaw)) foundNonStriker = allNames[1];
+                      else foundNonStriker = allNames[0]; 
                   }
               }
-
               if (!foundNonStriker) {
                   let matchBlock = bodyText.match(/SR\s+(.+?)\s+Bowler/i);
                   if (matchBlock) {
@@ -287,61 +262,110 @@ module.exports = async function (req, res) {
                       }
                   }
               }
-
               payload.non_striker = foundNonStriker || "Off-Strike";
           } catch(e) { payload.non_striker = "Extractor Error"; }
 
-          // --- [TARGET #9] BOWLER EXTRACTION (SECURED) ---
           try {
               let foundBowler = "";
               let strikerRaw = payload.striker.replace(/\*/g, '').trim();
               let nonStrikerRaw = payload.non_striker.trim();
-
               if ($) {
                   let allProfileNames = [];
                   $('a[href*="/profiles/"]').each((i, el) => {
                       let name = $(el).text().trim();
                       if (name.length > 2 && !allProfileNames.includes(name)) allProfileNames.push(name);
                   });
-
                   let nonBatters = allProfileNames.filter(name => 
                       !strikerRaw.includes(name) && !name.includes(strikerRaw) &&
                       !nonStrikerRaw.includes(name) && !name.includes(nonStrikerRaw)
                   );
-
-                  if (nonBatters.length > 0) {
-                      foundBowler = nonBatters[0];
-                  }
+                  if (nonBatters.length > 0) foundBowler = nonBatters[0];
               }
-
               if (!foundBowler) {
                   let ecoMatch = bodyText.match(/ECO\s+([a-zA-Z\s\-\'\.]+?)\s*\d/i);
                   if (ecoMatch && ecoMatch[1]) {
                       let cleanName = ecoMatch[1].replace(/(Bowler|Batter|SR|ECO)/gi, '').trim();
-                      if (cleanName.length > 2) {
-                          foundBowler = cleanName;
-                      }
+                      if (cleanName.length > 2) foundBowler = cleanName;
                   }
               }
-
               payload.bowler = foundBowler || "Active Bowler";
           } catch(e) { payload.bowler = "Extractor Error"; }
 
-          // --- [TARGET #12] LAST OVER BALLS (SECURED) ---
           try {
               let recentTextMatch = bodyText.match(/Recent\s*:\s*([W0-9NbLwd|\s]+)/i);
               if (recentTextMatch) payload.last_over = recentTextMatch[1].split(/[|\s]+/).filter(b => b.trim()).slice(-6);
               else payload.last_over = ["-", "-", "-", "-", "-", "-"];
           } catch(e) { payload.last_over = ["E", "R", "R", "O", "R", "!"]; }
 
-          // --- [TARGET #13] PREDICTION (UPDATED FOR TARGET #6) ---
+          // --- [TARGET #13] QUANTUM ORACLE PREDICTION ENGINE (MASSIVE UPGRADE) ---
           try {
-              if (payload.required_rr !== "YAHOO: No REQ" && payload.required_rr !== "1st Innings" && payload.required_rr !== "Error") {
-                  payload.prediction = "TRACKING CHASE PROBABILITY...";
-              } else if (payload.current_rr !== "YAHOO: No CRR" && payload.current_rr !== "Error") {
-                  payload.prediction = `PROJECTED TARGET: ${Math.floor(parseFloat(payload.current_rr) * 20)} RUNS`;
+              if (payload.live_score.includes('/')) {
+                  // 1. Parse Live Metrics
+                  let scoreMatch = payload.live_score.match(/(\d+)\/(\d+)\s*\(([\d\.]+)\)/);
+                  if (scoreMatch) {
+                      let runs = parseInt(scoreMatch[1]);
+                      let wkts = parseInt(scoreMatch[2]);
+                      let oversStr = scoreMatch[3];
+                      let oversSplit = oversStr.split('.');
+                      let overs = parseInt(oversSplit[0]);
+                      let balls = oversSplit[1] ? parseInt(oversSplit[1]) : 0;
+                      let totalBalls = (overs * 6) + balls;
+
+                      // 2. Momentum Scanner (Calculates momentum from last_over array)
+                      let recentRuns = 0;
+                      let validBalls = 0;
+                      let recentWicketFell = false;
+                      
+                      payload.last_over.forEach(b => {
+                          if (b === 'W') recentWicketFell = true;
+                          else if (b === 'Wd' || b === 'Nb') { recentRuns += 1; }
+                          else if (!isNaN(parseInt(b))) { recentRuns += parseInt(b); validBalls++; }
+                      });
+                      
+                      let crr = parseFloat(payload.current_rr) || (runs / totalBalls) * 6;
+                      let recentRR = validBalls > 0 ? (recentRuns / validBalls) * 6 : crr;
+                      
+                      // 3. The Algorithm: 60% Pattern + 40% History - Wicket Penalty
+                      let blendedRR = (recentRR * 0.6) + (crr * 0.4);
+                      if (recentWicketFell) blendedRR *= 0.85; // 15% drop if wicket fell recently
+                      if (wkts >= 6) blendedRR *= 0.70; // Heavy penalty for tailenders
+
+                      // 4. Milestone Forecaster
+                      let projections = [];
+                      let milestones = [6, 10, 15, 20];
+                      for (let m of milestones) {
+                          if (overs < m) {
+                              let oversLeft = m - (overs + (balls/6));
+                              let projected = Math.floor(runs + (oversLeft * blendedRR));
+                              // Hard ceiling if wickets are falling too fast
+                              if (wkts >= 8) projected = Math.min(projected, runs + 10);
+                              projections.push(`[${m}v: ${projected}]`);
+                          }
+                      }
+
+                      // 5. Tactical Ticker (Eat / Play)
+                      let tactic = "";
+                      if (wkts >= 7 || (wkts >= 4 && blendedRR < 7)) tactic = "🔴 EAT (LAY) - COLLAPSING PATTERN";
+                      else if (recentWicketFell && blendedRR < 8) tactic = "🟡 HOLD - PATTERN UNSTABLE";
+                      else if (blendedRR >= 10 && wkts <= 3) tactic = "🟢 PLAY (BACK) - HIGH AGGRESSION";
+                      else tactic = "🟡 HOLD - STANDARD ACCUMULATION";
+
+                      // 6. Compile Output
+                      if (payload.required_rr !== "YAHOO: No REQ" && payload.required_rr !== "1st Innings" && payload.required_rr !== "Error") {
+                          // It's a chase, modify output for 2nd innings
+                          payload.prediction = `CHASE ORACLE | TACTIC: ${tactic} | REQ: ${payload.required_rr}`;
+                      } else {
+                          // 1st Innings Projections
+                          if (projections.length > 0) payload.prediction = `TARGETS: ${projections.join(' ')} \nTACTIC: ${tactic}`;
+                          else payload.prediction = `INNINGS ENDING \nTACTIC: ${tactic}`;
+                      }
+                  } else {
+                      payload.prediction = "ORACLE: AWAITING SUFFICIENT DATA";
+                  }
+              } else {
+                  payload.prediction = "ORACLE: OFFLINE";
               }
-          } catch(e) { payload.prediction = "Prediction Error"; }
+          } catch(e) { payload.prediction = "Quantum Core Error"; }
       }
 
       // --- COMPLETED MATCH FALLBACKS ---
@@ -371,8 +395,6 @@ module.exports = async function (req, res) {
           if (payload.toss === "Tracking Toss Data..." || payload.toss.includes("YAHOO")) payload.toss = "Awaiting Coin Drop";
           if (payload.toss !== "Awaiting Coin Drop") payload.status = payload.toss;
       }
-
-      // --- [TARGET #14] SOURCE URL (SECURED) ---
 
       return res.status(200).json({ success: true, match_info: payload });
 
