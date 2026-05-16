@@ -2,9 +2,13 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 
 module.exports = async function (req, res) {
+  // --- AGGRESSIVE ANTI-CACHING ARMOR ---
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
@@ -29,7 +33,7 @@ module.exports = async function (req, res) {
   let pageTitle = "";
   let bodyText = "";
   let espnMatchData = null; 
-  let $ = null; // Elevating scope so the parser survives all phases
+  let $ = null; // Scope elevated and protected
 
   // ==============================================================
   // 0. THE ALIAS ENGINE 
@@ -171,7 +175,7 @@ module.exports = async function (req, res) {
       }
 
       if (!htmlAcquired) {
-          payload.status = "YAHOO: IPL 2026 Match Not Found";
+          payload.status = "YAHOO: IPL 2026 Match Not Found for Target Date";
           payload.title = "UPLINK FAILED";
           return res.status(200).json({ success: true, match_info: payload }); 
       }
@@ -183,7 +187,6 @@ module.exports = async function (req, res) {
       let venueMatch = bodyText.match(/Venue\s*:\s*([^•|{]+)/i) || (espnMatchData && espnMatchData.ground ? [null, espnMatchData.ground.name] : null);
       if (venueMatch) payload.venue = venueMatch[1].trim();
 
-      // Armor Check: Only use Cheerio selector if $ was successfully bound
       let statusText = "";
       if ($) {
           statusText = $('.cb-status-msg, .cb-text-complete, .ui-match-status').first().text().trim();
@@ -251,7 +254,6 @@ module.exports = async function (req, res) {
           } else {
              payload.striker = "Live Target Engaged"; payload.bowler = "Live Target Engaged";
              
-             // Armor Check for Live Scraping
              if ($) {
                  let batsmen = [];
                  $('.cb-min-inf').each((i, el) => {
