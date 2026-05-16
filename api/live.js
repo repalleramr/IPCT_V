@@ -12,7 +12,6 @@ module.exports = async function (req, res) {
   let targetTeams = (req.query.teams || "").toLowerCase().trim();
   let rawDateStr = req.query.time || ""; 
   
-  // FIXED: Restored complete temporal variable extraction
   let targetDate = rawDateStr.split('(')[0].trim().toLowerCase();
   let targetMonth = targetDate.split(' ')[0] || "";
   let targetDay = targetDate.split(' ')[1] || ""; 
@@ -30,6 +29,7 @@ module.exports = async function (req, res) {
   let pageTitle = "";
   let bodyText = "";
   let espnMatchData = null; 
+  let $ = null; // Elevating scope so the parser survives all phases
 
   // ==============================================================
   // 0. THE ALIAS ENGINE 
@@ -73,11 +73,11 @@ module.exports = async function (req, res) {
                   
                   for (let dir of searchDirs) {
                       const res = await axios.get(dir.url, { headers, timeout: 3000 });
-                      const $ = cheerio.load(res.data);
-                      $('a').each((i, el) => {
-                          let txt = $(el).text().toLowerCase();
-                          let href = $(el).attr('href') || "";
-                          let parentTxt = $(el).parent().parent().text().toLowerCase();
+                      const $temp = cheerio.load(res.data);
+                      $temp('a').each((i, el) => {
+                          let txt = $temp(el).text().toLowerCase();
+                          let href = $temp(el).attr('href') || "";
+                          let parentTxt = $temp(el).parent().parent().text().toLowerCase();
                           
                           let isIPL = href.includes('indian-premier-league') || parentTxt.includes('ipl');
                           let hasMatchId = href.match(/\/\d{4,}\//); 
@@ -97,7 +97,7 @@ module.exports = async function (req, res) {
               if (cbUrl) {
                   cbUrl = cbUrl.replace('www.', 'm.').replace('/live-cricket-scorecard/', '/cricket-scores/');
                   const cbRes = await axios.get(cbUrl, { headers, timeout: 4000 });
-                  const $ = cheerio.load(cbRes.data);
+                  $ = cheerio.load(cbRes.data);
                   $('script, style, noscript').remove();
                   pageTitle = $('title').text() || "";
                   bodyText = $('body').text().replace(/\s+/g, ' ');
@@ -113,10 +113,10 @@ module.exports = async function (req, res) {
               let crexUrl = targetUrl.includes('crex') ? targetUrl : "";
               if (!crexUrl && targetTeams) {
                   const cxRes = await axios.get('https://crex.live/fixtures/match-list', { headers, timeout: 3000 });
-                  const $cx = cheerio.load(cxRes.data);
-                  $cx('a').each((i, el) => {
-                      let txt = $cx(el).text().toLowerCase();
-                      let href = $cx(el).attr('href') || "";
+                  const $temp = cheerio.load(cxRes.data);
+                  $temp('a').each((i, el) => {
+                      let txt = $temp(el).text().toLowerCase();
+                      let href = $temp(el).attr('href') || "";
                       if ((txt.includes('ipl') || txt.includes('indian premier league')) && href.includes('scoreboard') && matchesTeams(txt)) {
                           crexUrl = 'https://crex.live' + href;
                       }
@@ -124,7 +124,7 @@ module.exports = async function (req, res) {
               }
               if (crexUrl) {
                   const cRes = await axios.get(crexUrl, { headers, timeout: 3500 });
-                  const $ = cheerio.load(cRes.data);
+                  $ = cheerio.load(cRes.data);
                   $('script, style, noscript').remove();
                   pageTitle = $('title').text() || "";
                   bodyText = $('body').text().replace(/\s+/g, ' ');
@@ -148,7 +148,6 @@ module.exports = async function (req, res) {
                       let isIPL = (m.series?.name?.toLowerCase().includes('ipl') || m.title.toLowerCase().includes('ipl'));
                       let hasTeam = matchesTeams(m.title.toLowerCase() + " " + m.teams.map(t => t.team.abbreviation).join(" ").toLowerCase());
                       
-                      // Safe check against restored targetDay
                       let isDateMatch = true;
                       if (targetDate && m.startTime) {
                            let mDate = new Date(m.startTime);
@@ -184,7 +183,12 @@ module.exports = async function (req, res) {
       let venueMatch = bodyText.match(/Venue\s*:\s*([^•|{]+)/i) || (espnMatchData && espnMatchData.ground ? [null, espnMatchData.ground.name] : null);
       if (venueMatch) payload.venue = venueMatch[1].trim();
 
-      let statusText = $('.cb-status-msg, .cb-text-complete, .ui-match-status').first().text().trim();
+      // Armor Check: Only use Cheerio selector if $ was successfully bound
+      let statusText = "";
+      if ($) {
+          statusText = $('.cb-status-msg, .cb-text-complete, .ui-match-status').first().text().trim();
+      }
+
       let titleWin = pageTitle.match(/([a-zA-Z\s\-]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
       
       if (!statusText && titleWin) statusText = titleWin[1].trim();
@@ -197,7 +201,7 @@ module.exports = async function (req, res) {
 
       if (statusLower.includes('won by') || statusLower.includes('tied') || statusLower.includes('abandoned')) {
           state = "completed";
-      } else if (bodyText.includes('CRR:') || bodyText.includes('REQ:') || $('.ui-bat-team-scores').length > 0 || (espnMatchData && espnMatchData.status === "Live")) {
+      } else if (bodyText.includes('CRR:') || bodyText.includes('REQ:') || ($ && $('.ui-bat-team-scores').length > 0) || (espnMatchData && espnMatchData.status === "Live")) {
           state = "live";
       }
 
@@ -246,16 +250,20 @@ module.exports = async function (req, res) {
               payload.striker = "Tracking via API..."; payload.bowler = "Tracking via API...";
           } else {
              payload.striker = "Live Target Engaged"; payload.bowler = "Live Target Engaged";
-             let batsmen = [];
-             $('.cb-min-inf').each((i, el) => {
-                 let text = $(el).text().trim();
-                 if (text && !text.includes('CRR')) batsmen.push(text);
-             });
-             if (batsmen[0]) payload.striker = batsmen[0];
-             if (batsmen[1]) payload.non_striker = batsmen[1];
+             
+             // Armor Check for Live Scraping
+             if ($) {
+                 let batsmen = [];
+                 $('.cb-min-inf').each((i, el) => {
+                     let text = $(el).text().trim();
+                     if (text && !text.includes('CRR')) batsmen.push(text);
+                 });
+                 if (batsmen[0]) payload.striker = batsmen[0];
+                 if (batsmen[1]) payload.non_striker = batsmen[1];
 
-             let cbBowler = $('.cb-min-bowl-rw').find('a').first().text().trim();
-             if (cbBowler) payload.bowler = cbBowler;
+                 let cbBowler = $('.cb-min-bowl-rw').find('a').first().text().trim();
+                 if (cbBowler) payload.bowler = cbBowler;
+             }
           }
 
           let recentTextMatch = bodyText.match(/Recent\s*:\s*([W0-9NbLwd|\s]+)/i);
