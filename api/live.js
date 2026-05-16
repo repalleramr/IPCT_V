@@ -213,13 +213,11 @@ module.exports = async function (req, res) {
       payload.match_state = state;
 
       // ==============================================================
-      // PHASE 3: TIMELINE-SPECIFIC DATA EXTRACTION (PATCHED)
+      // PHASE 3: TIMELINE-SPECIFIC DATA EXTRACTION 
       // ==============================================================
-      
-      // BROADENED TOSS REGEX: Handles "elected to field", "opted to bat", or "Toss:" prefix
-      let tossMatch = bodyText.match(/([a-zA-Z\s]+won the toss and (?:opted|elected|chose|decided) to [a-zA-Z\s]+)/i);
+      let tossMatch = bodyText.match(/([A-Z][a-z]+\s[A-Za-z]+\swon the toss and (?:opted|elected|chose|decided) to (?:bat|bowl) first)/i);
       if (!tossMatch) tossMatch = bodyText.match(/Toss\s*:\s*([^•|{]+)/i);
-      
+
       if (tossMatch) payload.toss = tossMatch[1].trim();
       else if (espnMatchData && espnMatchData.tossResults) payload.toss = espnMatchData.tossResults.text;
 
@@ -258,23 +256,26 @@ module.exports = async function (req, res) {
           if (espnMatchData && payload.source_url === "ESPN-API-Uplink") {
               payload.striker = "Tracking via API..."; payload.bowler = "Tracking via API...";
           } else {
-             // FALLBACK ARMORED
              payload.striker = "Live Target Engaged"; payload.bowler = "Live Target Engaged";
              
+             // THE DIGIT SPLITTER: Pulls names by slicing the string right before the runs/overs digits
              if ($) {
                  let batsmen = [];
-                 // PATCH: Only targets the anchor links to extract clean names
-                 $('.cb-min-bat-rw a, .cb-min-inf a').each((i, el) => {
+                 $('.cb-min-bat-rw').each((i, el) => {
                      let text = $(el).text().trim();
-                     if (text) batsmen.push(text);
+                     let name = text.split(/\d/)[0].trim(); 
+                     if (name && !name.toLowerCase().includes('batter') && !name.toLowerCase().includes('batsman')) {
+                         batsmen.push(name);
+                     }
                  });
                  if (batsmen[0]) payload.striker = batsmen[0];
                  if (batsmen[1]) payload.non_striker = batsmen[1];
 
-                 // PATCH: Only targets the anchor link for the bowler
-                 let cbBowler = $('.cb-min-bowl-rw a').first().text().trim();
-                 if (!cbBowler) cbBowler = $('.cb-min-bowl-rw').text().replace(/[\d\.\-]+/g, '').trim(); // Regex cleanup if no link
-                 if (cbBowler) payload.bowler = cbBowler;
+                 let bowlerRowText = $('.cb-min-bowl-rw').first().text().trim();
+                 let bowlerName = bowlerRowText.split(/\d/)[0].trim();
+                 if (bowlerName && !bowlerName.toLowerCase().includes('bowler')) {
+                     payload.bowler = bowlerName;
+                 }
              }
           }
 
