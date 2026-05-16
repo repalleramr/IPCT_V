@@ -81,11 +81,10 @@ module.exports = async function (req, res) {
 
   try {
       // ==============================================================
-      // PHASE 1: LIVE DATA ACQUISITION 
+      // PHASE 1: LIVE DATA ACQUISITION (DO NOT TOUCH)
       // ==============================================================
       let htmlAcquired = false;
 
-      // --- TIER 1: CRICBUZZ ---
       if (!htmlAcquired) {
           try {
               let cbUrl = targetUrl;
@@ -102,12 +101,9 @@ module.exports = async function (req, res) {
                           let txt = $temp(el).text().toLowerCase();
                           let href = $temp(el).attr('href') || "";
                           let parentTxt = $temp(el).parent().parent().text().toLowerCase();
-                          
                           let isIPL = href.includes('indian-premier-league') || parentTxt.includes('ipl');
                           let hasMatchId = href.match(/\/\d{4,}\//); 
-                          
                           let strictTeamCheck = txt + " " + href; 
-
                           if (isIPL && hasMatchId && matchesTeams(strictTeamCheck) && href.includes('scores')) {
                               cbUrl = 'https://m.cricbuzz.com' + href;
                           }
@@ -125,10 +121,9 @@ module.exports = async function (req, res) {
                   payload.source_url = cbUrl;
                   htmlAcquired = true;
               }
-          } catch (e) { /* Pivot to CREX */ }
+          } catch (e) {}
       }
 
-      // --- TIER 2: CREX ---
       if (!htmlAcquired) {
           try {
               let crexUrl = targetUrl.includes('crex') ? targetUrl : "";
@@ -138,7 +133,6 @@ module.exports = async function (req, res) {
                   $temp('a').each((i, el) => {
                       let txt = $temp(el).text().toLowerCase();
                       let href = $temp(el).attr('href') || "";
-                      
                       let strictTeamCheck = txt + " " + href;
                       if ((txt.includes('ipl') || txt.includes('indian premier league')) && href.includes('scoreboard') && matchesTeams(strictTeamCheck)) {
                           crexUrl = 'https://crex.live' + href;
@@ -154,10 +148,9 @@ module.exports = async function (req, res) {
                   payload.source_url = crexUrl;
                   htmlAcquired = true;
               }
-          } catch (e) { /* Pivot to ESPN */ }
+          } catch (e) {}
       }
 
-      // --- TIER 3: ESPN JSON API ---
       if (!htmlAcquired) {
           try {
               const espnRes = await axios.get('https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current', { headers, timeout: 3000 });
@@ -166,14 +159,13 @@ module.exports = async function (req, res) {
                   let hasTeam = matchesTeams(m.title.toLowerCase() + " " + m.teams.map(t => t.team.abbreviation).join(" ").toLowerCase());
                   return isIPL && hasTeam;
               });
-              
               if (espnMatchData) {
                   pageTitle = espnMatchData.title;
                   bodyText = espnMatchData.statusText + " " + (espnMatchData.tossResults?.text || "");
                   payload.source_url = "ESPN-API-Uplink";
                   htmlAcquired = true;
               }
-          } catch (e) { /* Total Failure */ }
+          } catch (e) {}
       }
 
       if (!htmlAcquired) {
@@ -190,9 +182,7 @@ module.exports = async function (req, res) {
       if (venueMatch) payload.venue = venueMatch[1].trim();
 
       let statusText = "";
-      if ($) {
-          statusText = $('.cb-status-msg, .cb-text-complete, .ui-match-status').first().text().trim();
-      }
+      if ($) statusText = $('.cb-status-msg, .cb-text-complete, .ui-match-status').first().text().trim();
 
       let titleWin = pageTitle.match(/([a-zA-Z\s\-]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
       
@@ -221,28 +211,19 @@ module.exports = async function (req, res) {
       if (tossMatch) payload.toss = tossMatch[1].trim();
       else if (espnMatchData && espnMatchData.tossResults) payload.toss = espnMatchData.tossResults.text;
 
-      // --- ROUTE A: COMPLETED MATCH ---
       if (state === "completed") {
           payload.status = statusText || "Match Concluded";
-          
           let rawTitleArray = pageTitle.split('|');
-          if (rawTitleArray.length > 1) {
-              payload.live_score = rawTitleArray[1].replace(/-\s*Live.*?Score/i, '').trim();
-          } else {
-              payload.live_score = "Match Ended";
-          }
+          if (rawTitleArray.length > 1) payload.live_score = rawTitleArray[1].replace(/-\s*Live.*?Score/i, '').trim();
+          else payload.live_score = "Match Ended";
 
           payload.striker = "Match Ended"; payload.non_striker = "Match Ended";
           payload.bowler = "Match Ended"; payload.current_rr = "Match Ended";
           payload.required_rr = "Match Ended"; payload.last_over = ["E", "N", "D", "E", "D", "!"];
-          
           let potmMatch = bodyText.match(/player of the match\s*([a-zA-Z\s]+?)(?:match\svideos|view\sall|share|$)/i);
           payload.prediction = potmMatch ? `POTM: ${potmMatch[1].trim()}` : "Match Ended";
-          
           if (payload.toss === "YAHOO: No Toss Data") payload.toss = "Toss Record Unavailable";
       } 
-      
-      // --- ROUTE B: LIVE MATCH ---
       else if (state === "live") {
           let scoreMatch = pageTitle.match(/([A-Z]{2,4}\s\d+\/\d+\s\([^)]+\))/);
           if (scoreMatch) payload.live_score = scoreMatch[1];
@@ -253,30 +234,23 @@ module.exports = async function (req, res) {
           let reqMatch = bodyText.match(/REQ:\s*([\d\.]+)/i);
           if (reqMatch) payload.required_rr = reqMatch[1];
 
-          if (espnMatchData && payload.source_url === "ESPN-API-Uplink") {
-              payload.striker = "Tracking via API..."; payload.bowler = "Tracking via API...";
-          } else {
-             payload.striker = "Live Target Engaged"; payload.bowler = "Live Target Engaged";
-             
-             // THE DIGIT SPLITTER: Pulls names by slicing the string right before the runs/overs digits
-             if ($) {
-                 let batsmen = [];
-                 $('.cb-min-bat-rw').each((i, el) => {
-                     let text = $(el).text().trim();
-                     let name = text.split(/\d/)[0].trim(); 
-                     if (name && !name.toLowerCase().includes('batter') && !name.toLowerCase().includes('batsman')) {
-                         batsmen.push(name);
-                     }
-                 });
-                 if (batsmen[0]) payload.striker = batsmen[0];
-                 if (batsmen[1]) payload.non_striker = batsmen[1];
+          if ($) {
+              let batterTexts = [];
+              $('.cb-min-bat-rw').each((i, el) => {
+                  let txt = $(el).text().trim();
+                  let nameMatch = txt.match(/^([a-zA-Z\s\-\']+)/); 
+                  if (nameMatch && nameMatch[1].length > 2 && !nameMatch[1].toLowerCase().includes('batter')) {
+                      batterTexts.push(nameMatch[1].trim());
+                  }
+              });
+              if (batterTexts[0]) payload.striker = batterTexts[0];
+              if (batterTexts[1]) payload.non_striker = batterTexts[1];
 
-                 let bowlerRowText = $('.cb-min-bowl-rw').first().text().trim();
-                 let bowlerName = bowlerRowText.split(/\d/)[0].trim();
-                 if (bowlerName && !bowlerName.toLowerCase().includes('bowler')) {
-                     payload.bowler = bowlerName;
-                 }
-             }
+              let bowlTxt = $('.cb-min-bowl-rw').first().text().trim();
+              let bowlMatch = bowlTxt.match(/^([a-zA-Z\s\-\']+)/);
+              if (bowlMatch && bowlMatch[1].length > 2 && !bowlMatch[1].toLowerCase().includes('bowler')) {
+                  payload.bowler = bowlMatch[1].trim();
+              }
           }
 
           let recentTextMatch = bodyText.match(/Recent\s*:\s*([W0-9NbLwd|\s]+)/i);
@@ -286,20 +260,42 @@ module.exports = async function (req, res) {
           if (payload.required_rr !== "YAHOO: No REQ") payload.prediction = "TRACKING CHASE PROBABILITY...";
           else if (payload.current_rr !== "YAHOO: No CRR") payload.prediction = `PROJECTED TARGET: ${Math.floor(parseFloat(payload.current_rr) * 20)} RUNS`;
       } 
-      
-      // --- ROUTE C: FUTURE MATCH ---
       else if (state === "future") {
           payload.live_score = "Match Not Started";
           payload.striker = "Waiting for Openers"; payload.non_striker = "Waiting for Openers";
           payload.bowler = "Waiting for Bowler"; payload.last_over = ["-", "-", "-", "-", "-", "-"];
           payload.prediction = "AWAITING START";
-          
           let matchDate = bodyText.match(/Date\s*:\s*([^•|{]+)/i);
           if (matchDate) payload.status = `Starts: ${matchDate[1].trim()}`;
           else if (espnMatchData) payload.status = "Pre-Match Standby";
-          
           if (payload.toss === "YAHOO: No Toss Data") payload.toss = "Awaiting Coin Drop";
           if (payload.toss !== "Awaiting Coin Drop") payload.status = payload.toss;
+      }
+
+      // ==============================================================
+      // PHASE 4: CROSS-SITE PLAYER PATCHER (Only fires if players are missing)
+      // ==============================================================
+      if (payload.match_state === "live" && (!payload.striker || payload.striker.includes("YAHOO") || payload.striker.length < 2)) {
+          try {
+              // Stealth Ping to the Live Directory Feed to steal player names from the summary snippet
+              const patchRes = await axios.get('https://m.cricbuzz.com/cricket-match/live-scores', { headers, timeout: 2500 });
+              const $patch = cheerio.load(patchRes.data);
+              $patch('a').each((i, el) => {
+                  let txt = $patch(el).text().replace(/\s+/g, ' ').trim();
+                  let href = $patch(el).attr('href') || "";
+                  if (href.includes('scores') && matchesTeams(txt)) {
+                      // Splits the summary string: "Score • Striker Name 50* • Bowler Name 2/20"
+                      let bulletParts = txt.split('•');
+                      if (bulletParts.length >= 3) {
+                          payload.striker = bulletParts[1].replace(/[\d\.\*\(\)]+/g, '').trim() || "Active Striker";
+                          payload.bowler = bulletParts[2].replace(/[\d\.\*\(\)\/]+/g, '').trim() || "Active Bowler";
+                          payload.non_striker = "Off-Strike"; // Secondary player hidden in summaries
+                      }
+                  }
+              });
+          } catch(e) {
+              // Fails silently, does not crash your score or toss data
+          }
       }
 
       return res.status(200).json({ success: true, match_info: payload });
@@ -311,7 +307,6 @@ module.exports = async function (req, res) {
       payload.bowler = "OH SORRY"; payload.toss = "OH SORRY";
       payload.venue = "OH SORRY"; payload.prediction = "OH SORRY: AI Offline";
       payload.last_over = ["O", "H", "S", "R", "R", "Y"];
-      
       return res.status(200).json({ success: false, error: err.message, match_info: payload });
   }
 };
