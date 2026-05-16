@@ -212,11 +212,10 @@ module.exports = async function (req, res) {
               if (reqMatch) payload.required_rr = reqMatch[1];
           } catch(e) { payload.current_rr = "Error"; payload.required_rr = "Error"; }
 
-          // --- [TARGET #7] STRIKER EXTRACTION (SECURED & DOUBLE-STAR PATCHED) ---
+          // --- [TARGET #7] STRIKER EXTRACTION (SECURED) ---
           try {
               let foundStriker = "";
 
-              // Tactic A: Aggressive Regex for the Bat Symbol
               let starMatch = bodyText.match(/([a-zA-Z\s\-\'\.]+?)\s*\*\s*\d+\s+\d+/);
               if (starMatch && starMatch[1]) {
                   let cleanName = starMatch[1].replace(/(Batter|SR|ECO|Runs|4s|6s)/gi, '').trim();
@@ -227,7 +226,6 @@ module.exports = async function (req, res) {
                   }
               }
 
-              // Tactic B: Profile Link Fallback
               if (!foundStriker && $) {
                   $('a[href*="/profiles/"]').each((i, el) => {
                       let name = $(el).text().trim();
@@ -238,16 +236,15 @@ module.exports = async function (req, res) {
                   });
               }
 
-              // Double-Star Patch: Forcefully clean any ** anomalies
               if (foundStriker) foundStriker = foundStriker.replace(/\s*\*+/g, ' *').trim();
 
               payload.striker = foundStriker || "Target Engaged";
           } catch(e) { payload.striker = "Extractor Error"; }
 
-          // --- [TARGET #8] NON-STRIKER EXTRACTION (NEW FIX) ---
+          // --- [TARGET #8] NON-STRIKER EXTRACTION (SECURED) ---
           try {
               let foundNonStriker = "";
-              let strikerNameRaw = payload.striker.replace(/\*/g, '').trim(); // Remove star to compare cleanly
+              let strikerNameRaw = payload.striker.replace(/\*/g, '').trim(); 
 
               if ($) {
                   let allNames = [];
@@ -256,9 +253,7 @@ module.exports = async function (req, res) {
                       if (name.length > 2 && !allNames.includes(name)) allNames.push(name);
                   });
                   
-                  // The live screen ALWAYS lists the 2 active batters first in the profile array
                   if (allNames.length >= 2) {
-                      // Subtraction Protocol: If Striker is Name 1, Non-Striker is Name 2.
                       if (strikerNameRaw.includes(allNames[0]) || allNames[0].includes(strikerNameRaw)) {
                           foundNonStriker = allNames[1];
                       } else {
@@ -267,14 +262,12 @@ module.exports = async function (req, res) {
                   }
               }
 
-              // Text-Block Backup if HTML Profile Links are blocked by the site
               if (!foundNonStriker) {
                   let matchBlock = bodyText.match(/SR\s+(.+?)\s+Bowler/i);
                   if (matchBlock) {
                       let nameMatches = [...matchBlock[1].matchAll(/([a-zA-Z\s\-\'\.]+?)\s*(?:\*|\d{1,3}\s+\d{1,3})/g)];
                       for (let m of nameMatches) {
                           let possibleName = m[1].trim();
-                          // Find the name that IS NOT the Striker
                           if (possibleName.length > 2 && !strikerNameRaw.includes(possibleName) && !possibleName.includes(strikerNameRaw)) {
                               foundNonStriker = possibleName;
                               break;
@@ -286,9 +279,44 @@ module.exports = async function (req, res) {
               payload.non_striker = foundNonStriker || "Off-Strike";
           } catch(e) { payload.non_striker = "Extractor Error"; }
 
-          // --- [TARGET #9] BOWLER (PENDING FIX) ---
+          // --- [TARGET #9] BOWLER EXTRACTION (NEW FIX) ---
           try {
-              payload.bowler = "Active Bowler";
+              let foundBowler = "";
+              let strikerRaw = payload.striker.replace(/\*/g, '').trim();
+              let nonStrikerRaw = payload.non_striker.trim();
+
+              // Tactic A: "The Third Man" Profile Hunter
+              if ($) {
+                  let allProfileNames = [];
+                  $('a[href*="/profiles/"]').each((i, el) => {
+                      let name = $(el).text().trim();
+                      if (name.length > 2 && !allProfileNames.includes(name)) allProfileNames.push(name);
+                  });
+
+                  // Filter out the known Striker and Non-Striker
+                  let nonBatters = allProfileNames.filter(name => 
+                      !strikerRaw.includes(name) && !name.includes(strikerRaw) &&
+                      !nonStrikerRaw.includes(name) && !name.includes(nonStrikerRaw)
+                  );
+
+                  // The first remaining name is the Bowler
+                  if (nonBatters.length > 0) {
+                      foundBowler = nonBatters[0];
+                  }
+              }
+
+              // Tactic B: The "ECO" String Backup (If profiles are hidden)
+              if (!foundBowler) {
+                  let ecoMatch = bodyText.match(/ECO\s+([a-zA-Z\s\-\'\.]+?)\s*\d/i);
+                  if (ecoMatch && ecoMatch[1]) {
+                      let cleanName = ecoMatch[1].replace(/(Bowler|Batter|SR|ECO)/gi, '').trim();
+                      if (cleanName.length > 2) {
+                          foundBowler = cleanName;
+                      }
+                  }
+              }
+
+              payload.bowler = foundBowler || "Active Bowler";
           } catch(e) { payload.bowler = "Extractor Error"; }
 
           // --- [TARGET #12] LAST OVER BALLS (SECURED) ---
@@ -347,3 +375,4 @@ module.exports = async function (req, res) {
       return res.status(200).json({ success: false, error: err.message, match_info: payload });
   }
 };
+        
