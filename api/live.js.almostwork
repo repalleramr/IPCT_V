@@ -204,12 +204,24 @@ module.exports = async function (req, res) {
               else if (espnMatchData) payload.live_score = `${espnMatchData.teams[0].score || ''} vs ${espnMatchData.teams[1].score || ''}`;
           } catch(e) { payload.live_score = "Score Error"; }
 
-          // --- [TARGET #5 & #6] RUN RATES (SECURED) ---
+          // --- [TARGET #5 & #6] RUN RATES (NEW FIX FOR TARGET #6) ---
           try {
               let crrMatch = bodyText.match(/CRR:\s*([\d\.]+)/i);
               if (crrMatch) payload.current_rr = crrMatch[1];
-              let reqMatch = bodyText.match(/REQ:\s*([\d\.]+)/i);
-              if (reqMatch) payload.required_rr = reqMatch[1];
+              
+              // Tactic A: Aggressive Multi-Regex for Required Run Rate
+              let reqMatch = bodyText.match(/(?:REQ|RRR|Req RR)\s*[:-]?\s*([\d\.]+)/i);
+              if (reqMatch) {
+                  payload.required_rr = reqMatch[1];
+              } else {
+                  // Tactic B: ESPN JSON Stealth Backup
+                  if (espnMatchData && espnMatchData.liveInning && espnMatchData.liveInning.requiredRunRate) {
+                      payload.required_rr = espnMatchData.liveInning.requiredRunRate.toString();
+                  } else {
+                      // Tactic C: Graceful 1st Innings Fallback
+                      payload.required_rr = "1st Innings";
+                  }
+              }
           } catch(e) { payload.current_rr = "Error"; payload.required_rr = "Error"; }
 
           // --- [TARGET #7] STRIKER EXTRACTION (SECURED) ---
@@ -279,13 +291,12 @@ module.exports = async function (req, res) {
               payload.non_striker = foundNonStriker || "Off-Strike";
           } catch(e) { payload.non_striker = "Extractor Error"; }
 
-          // --- [TARGET #9] BOWLER EXTRACTION (NEW FIX) ---
+          // --- [TARGET #9] BOWLER EXTRACTION (SECURED) ---
           try {
               let foundBowler = "";
               let strikerRaw = payload.striker.replace(/\*/g, '').trim();
               let nonStrikerRaw = payload.non_striker.trim();
 
-              // Tactic A: "The Third Man" Profile Hunter
               if ($) {
                   let allProfileNames = [];
                   $('a[href*="/profiles/"]').each((i, el) => {
@@ -293,19 +304,16 @@ module.exports = async function (req, res) {
                       if (name.length > 2 && !allProfileNames.includes(name)) allProfileNames.push(name);
                   });
 
-                  // Filter out the known Striker and Non-Striker
                   let nonBatters = allProfileNames.filter(name => 
                       !strikerRaw.includes(name) && !name.includes(strikerRaw) &&
                       !nonStrikerRaw.includes(name) && !name.includes(nonStrikerRaw)
                   );
 
-                  // The first remaining name is the Bowler
                   if (nonBatters.length > 0) {
                       foundBowler = nonBatters[0];
                   }
               }
 
-              // Tactic B: The "ECO" String Backup (If profiles are hidden)
               if (!foundBowler) {
                   let ecoMatch = bodyText.match(/ECO\s+([a-zA-Z\s\-\'\.]+?)\s*\d/i);
                   if (ecoMatch && ecoMatch[1]) {
@@ -326,10 +334,13 @@ module.exports = async function (req, res) {
               else payload.last_over = ["-", "-", "-", "-", "-", "-"];
           } catch(e) { payload.last_over = ["E", "R", "R", "O", "R", "!"]; }
 
-          // --- [TARGET #13] PREDICTION (SECURED) ---
+          // --- [TARGET #13] PREDICTION (UPDATED FOR TARGET #6) ---
           try {
-              if (payload.required_rr !== "YAHOO: No REQ" && payload.required_rr !== "Error") payload.prediction = "TRACKING CHASE PROBABILITY...";
-              else if (payload.current_rr !== "YAHOO: No CRR" && payload.current_rr !== "Error") payload.prediction = `PROJECTED TARGET: ${Math.floor(parseFloat(payload.current_rr) * 20)} RUNS`;
+              if (payload.required_rr !== "YAHOO: No REQ" && payload.required_rr !== "1st Innings" && payload.required_rr !== "Error") {
+                  payload.prediction = "TRACKING CHASE PROBABILITY...";
+              } else if (payload.current_rr !== "YAHOO: No CRR" && payload.current_rr !== "Error") {
+                  payload.prediction = `PROJECTED TARGET: ${Math.floor(parseFloat(payload.current_rr) * 20)} RUNS`;
+              }
           } catch(e) { payload.prediction = "Prediction Error"; }
       }
 
@@ -375,4 +386,3 @@ module.exports = async function (req, res) {
       return res.status(200).json({ success: false, error: err.message, match_info: payload });
   }
 };
-        
