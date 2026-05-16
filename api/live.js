@@ -152,7 +152,6 @@ module.exports = async function (req, res) {
           let venueMatch = bodyText.match(/Venue\s*:\s*([^•|{]+)/i) || (espnMatchData && espnMatchData.ground ? [null, espnMatchData.ground.name] : null);
           if (venueMatch) payload.venue = venueMatch[1].trim();
 
-          // Base Status Pull
           let statusText = $ ? $('.cb-status-msg, .cb-text-complete, .ui-match-status').first().text().trim() : "";
           let titleWin = pageTitle.match(/([a-zA-Z\s\-]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
           if (!statusText && titleWin) statusText = titleWin[1].trim();
@@ -186,7 +185,7 @@ module.exports = async function (req, res) {
       // --- LIVE STATE EXTRACTION ---
       if (payload.match_state === "live") {
           
-          // --- [TARGET #2] STATUS REFINEMENT (NEW OVERRIDE) ---
+          // --- [TARGET #2] STATUS REFINEMENT (SECURED) ---
           try {
               if (payload.status === "Scanning Fields..." || payload.status === "") {
                   if (bodyText.match(/innings break/i)) payload.status = "Innings Break";
@@ -211,51 +210,44 @@ module.exports = async function (req, res) {
               if (reqMatch) payload.required_rr = reqMatch[1];
           } catch(e) { payload.current_rr = "Error"; payload.required_rr = "Error"; }
 
-          // --- [TARGET #7 & #8] STRIKER & NON-STRIKER (PENDING FIX) ---
+          // --- [TARGET #7] STRIKER EXTRACTION (NEW FIX) ---
           try {
-              payload.striker = "Target Engaged";
-              payload.non_striker = "Off-Strike";
-              if ($) {
-                  let batters = [];
-                  $('.cb-min-bat-rw').each((i, el) => {
-                      let rowText = $(el).text().replace(/\s+/g, ' ').trim();
-                      let cleanText = rowText;
-                      if (rowText.includes('SR ')) cleanText = rowText.split('SR ')[1];
-                      else if (rowText.includes('SR')) cleanText = rowText.split('SR')[1];
-                      
-                      let namePart = cleanText.split(/\d/)[0].trim(); 
-                      if (namePart.length > 2 && !namePart.toLowerCase().includes('batter')) {
-                          if (rowText.substring(0, namePart.length + 3).includes('*')) namePart += ' *';
-                          batters.push(namePart);
-                      }
-                  });
-                  if (batters.length > 0) {
-                      let starIdx = batters.findIndex(b => b.includes('*'));
-                      if (starIdx === 1) {
-                          payload.striker = batters[1]; payload.non_striker = batters[0];
-                      } else {
-                          payload.striker = batters[0]; payload.non_striker = batters[1] || "Off-Strike";
-                      }
+              let foundStriker = "";
+
+              // Tactic A: Aggressive Regex for the Bat Symbol & Numbers
+              let starMatch = bodyText.match(/([a-zA-Z\s\-\'\.]+?)\s*\*\s*\d+\s+\d+/);
+              if (starMatch && starMatch[1]) {
+                  let cleanName = starMatch[1].replace(/(Batter|SR|ECO|Runs|4s|6s)/gi, '').trim();
+                  // Strip any stray lowercase letters caught at the front (like 's' in 'sSR')
+                  cleanName = cleanName.replace(/^[a-z]+\s*/, '').trim();
+                  
+                  if (cleanName.length > 2 && !cleanName.toLowerCase().includes('match')) {
+                      foundStriker = cleanName + " *";
                   }
               }
-          } catch(e) { payload.striker = "Extractor Error"; payload.non_striker = "Extractor Error"; }
+
+              // Tactic B: Backup Profile Link Hunter
+              if (!foundStriker && $) {
+                  $('a[href*="/profiles/"]').each((i, el) => {
+                      let name = $(el).text().trim();
+                      let rowTxt = $(el).parent().parent().text();
+                      if (rowTxt.includes('*') && rowTxt.includes(name) && !foundStriker && name.length > 2) {
+                          foundStriker = name + " *";
+                      }
+                  });
+              }
+
+              payload.striker = foundStriker || "Target Engaged";
+          } catch(e) { payload.striker = "Extractor Error"; }
+
+          // --- [TARGET #8] NON-STRIKER (PENDING FIX) ---
+          try {
+              payload.non_striker = "Off-Strike";
+          } catch(e) { payload.non_striker = "Extractor Error"; }
 
           // --- [TARGET #9] BOWLER (PENDING FIX) ---
           try {
               payload.bowler = "Active Bowler";
-              if ($) {
-                  let bowlers = [];
-                  $('.cb-min-bowl-rw').each((i, el) => {
-                      let rowText = $(el).text().replace(/\s+/g, ' ').trim();
-                      let cleanText = rowText;
-                      if (rowText.includes('ECO ')) cleanText = rowText.split('ECO ')[1];
-                      else if (rowText.includes('ECO')) cleanText = rowText.split('ECO')[1];
-                      
-                      let namePart = cleanText.split(/\d/)[0].trim(); 
-                      if (namePart.length > 2 && !namePart.toLowerCase().includes('bowler')) bowlers.push(namePart);
-                  });
-                  if (bowlers[0]) payload.bowler = bowlers[0];
-              }
           } catch(e) { payload.bowler = "Extractor Error"; }
 
           // --- [TARGET #12] LAST OVER BALLS (SECURED) ---
@@ -299,9 +291,6 @@ module.exports = async function (req, res) {
           if (payload.toss === "Tracking Toss Data..." || payload.toss.includes("YAHOO")) payload.toss = "Awaiting Coin Drop";
           if (payload.toss !== "Awaiting Coin Drop") payload.status = payload.toss;
       }
-
-      // --- [TARGET #14] SOURCE URL (SECURED) ---
-      // Handled natively during Phase 1 Acquisition
 
       return res.status(200).json({ success: true, match_info: payload });
 
