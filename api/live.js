@@ -203,7 +203,7 @@ module.exports = async function (req, res) {
       payload.match_state = state;
 
       // ==============================================================
-      // PHASE 3: TIMELINE-SPECIFIC DATA EXTRACTION (PATCHED & ARMORED)
+      // PHASE 3: TIMELINE-SPECIFIC DATA EXTRACTION (Reverted to stable)
       // ==============================================================
       let tossMatch = bodyText.match(/([A-Z][a-zA-Z\s]+won the toss and (?:opted|elected|chose|decided) to (?:bat|bowl|field))/i);
       if (!tossMatch) tossMatch = bodyText.match(/Toss\s*:\s*([^•|{\(]+)/i);
@@ -235,60 +235,14 @@ module.exports = async function (req, res) {
           let reqMatch = bodyText.match(/REQ:\s*([\d\.]+)/i);
           if (reqMatch) payload.required_rr = reqMatch[1];
 
-          payload.striker = "Tracking Batter 1..."; 
-          payload.non_striker = "Tracking Batter 2...";
-          payload.bowler = "Tracking Bowler...";
+          // Set default placeholders so Phase 4 knows to engage
+          payload.striker = "Live Target Engaged"; 
+          payload.non_striker = "Live Target Engaged";
+          payload.bowler = "Live Target Engaged";
 
-          // -------------------------------------------------------------
-          // THE AGGRESSIVE STRING CLEANER (Fixes the "sSR" Garbage Bug)
-          // -------------------------------------------------------------
-          if ($) {
-              let batsmen = [];
-              $('.cb-min-bat-rw').each((i, el) => {
-                  let txt = $(el).text().replace(/\s+/g, ' ').trim();
-                  
-                  // Nuke hidden CSS table headers entirely
-                  txt = txt.replace(/Batter/gi, '').replace(/4s/gi, '').replace(/6s/gi, '').replace(/SR/gi, '').replace(/^s\s*/i, '').trim();
-                  
-                  // Extract name right before the first digit
-                  let nameMatch = txt.match(/^([a-zA-Z\s\-\']+?)\s*(?:\*|\d)/);
-                  if (nameMatch && nameMatch[1].trim().length > 2) {
-                      let name = nameMatch[1].trim();
-                      if (txt.includes(name + '*') || txt.includes(name + ' *') || txt.includes('*')) {
-                          if (!name.includes('*')) name += ' *';
-                      }
-                      batsmen.push(name);
-                  }
-              });
-              
-              // Assign Clean Names
-              if (batsmen[0]) payload.striker = batsmen[0];
-              if (batsmen[1]) payload.non_striker = batsmen[1];
-
-              let bowlers = [];
-              $('.cb-min-bowl-rw').each((i, el) => {
-                  let txt = $(el).text().replace(/\s+/g, ' ').trim();
-                  
-                  // Nuke hidden bowling headers
-                  txt = txt.replace(/Bowler/gi, '').replace(/\bO\b/g, '').replace(/\bM\b/g, '').replace(/\bR\b/g, '').replace(/\bW\b/g, '').replace(/ECO/gi, '').trim();
-                  
-                  let nameMatch = txt.match(/^([a-zA-Z\s\-\']+?)\s*\d/);
-                  if (nameMatch && nameMatch[1].trim().length > 2) {
-                      bowlers.push(nameMatch[1].trim());
-                  }
-              });
-              
-              if (bowlers[0]) payload.bowler = bowlers[0];
-          }
-
-          // Strict Last Over Array isolation (Prevents % leakage)
-          let recentTextMatch = bodyText.match(/Recent\s*:\s*([W\dNbLwd\|\s\.\-]+?)(?:[A-Z]{2,}5|%|Key|Match|Partnership|$)/i);
-          if (recentTextMatch) {
-              let rawBalls = recentTextMatch[1].replace(/[^W\dNbLwd\|\s\.\-]/g, ''); 
-              payload.last_over = rawBalls.split(/[|\s]+/).filter(b => b.trim()).slice(-6);
-          } else {
-              payload.last_over = ["-", "-", "-", "-", "-", "-"];
-          }
+          let recentTextMatch = bodyText.match(/Recent\s*:\s*([W0-9NbLwd|\s]+)/i);
+          if (recentTextMatch) payload.last_over = recentTextMatch[1].split(/[|\s]+/).filter(b => b.trim()).slice(-6);
+          else payload.last_over = ["-", "-", "-", "-", "-", "-"];
 
           if (payload.required_rr !== "YAHOO: No REQ") payload.prediction = "TRACKING CHASE PROBABILITY...";
           else if (payload.current_rr !== "YAHOO: No CRR") payload.prediction = `PROJECTED TARGET: ${Math.floor(parseFloat(payload.current_rr) * 20)} RUNS`;
@@ -303,6 +257,71 @@ module.exports = async function (req, res) {
           else if (espnMatchData) payload.status = "Pre-Match Standby";
           if (payload.toss === "Tracking Toss Data..." || payload.toss.includes("YAHOO")) payload.toss = "Awaiting Coin Drop";
           if (payload.toss !== "Awaiting Coin Drop") payload.status = payload.toss;
+      }
+
+      // ==============================================================
+      // PHASE 4: CROSS-SITE PLAYER PATCHER (Ultimate Fallback)
+      // ==============================================================
+      if (payload.match_state === "live") {
+          
+          // 1. STRIKER FIX: Vaporize '4s 6s SR' table headers before regexing the bat symbol
+          let safeBody = bodyText.replace(/4s/gi, '').replace(/6s/gi, '').replace(/SR/gi, '').replace(/Batter/gi, '');
+          let batSymbolMatch = safeBody.match(/([A-Za-z\s\-\']+)\s*\*/);
+          
+          if (batSymbolMatch && batSymbolMatch[1].trim().length > 2) {
+              let cleanStriker = batSymbolMatch[1].replace(/^[sS\s]+/, '').trim(); // Strips leading 's'
+              if (!cleanStriker.toLowerCase().includes('match')) {
+                  payload.striker = cleanStriker + " *";
+              }
+          }
+
+          // Initialize defaults to prevent YAHOO UI errors
+          if (!payload.non_striker || payload.non_striker.includes("Target")) payload.non_striker = "Active Non-Striker";
+          if (!payload.bowler || payload.bowler.includes("Target")) payload.bowler = "Active Bowler";
+
+          // 2. BOWLER FIX: Stealth Cricbuzz Summary Ping
+          if (payload.bowler === "Active Bowler") {
+              try {
+                  const patchRes = await axios.get('https://m.cricbuzz.com/cricket-match/live-scores', { headers, timeout: 2500 });
+                  const $patch = cheerio.load(patchRes.data);
+                  $patch('a').each((i, el) => {
+                      let txt = $patch(el).text().replace(/\s+/g, ' ').trim();
+                      if ($patch(el).attr('href').includes('scores') && matchesTeams(txt)) {
+                          let bulletParts = txt.split('•');
+                          // Bullet format: KKR 84/1 • Finn Allen 30* • Mohit Sharma 1/15
+                          if (bulletParts.length >= 3) {
+                              if (payload.striker.includes("Target")) {
+                                  payload.striker = bulletParts[1].replace(/[\d\.\*\(\)]+/g, '').trim() + " *";
+                              }
+                              payload.bowler = bulletParts[2].replace(/[\d\.\*\(\)\/]+/g, '').trim();
+                          }
+                      }
+                  });
+              } catch(e) {}
+          }
+          
+          // 3. NON-STRIKER FIX: Stealth ESPN Inning Ping
+          if (payload.non_striker === "Active Non-Striker" || payload.bowler === "Active Bowler") {
+              try {
+                  const espnRes = await axios.get('https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current', { headers, timeout: 2500 });
+                  let eMatch = espnRes.data.matches.find(m => {
+                      let isIPL = (m.series?.name?.toLowerCase().includes('ipl') || m.title.toLowerCase().includes('ipl'));
+                      let hasTeam = matchesTeams(m.title.toLowerCase() + " " + m.teams.map(t => t.team.abbreviation).join(" ").toLowerCase());
+                      return isIPL && hasTeam;
+                  });
+                  
+                  if (eMatch && eMatch.liveInning) {
+                      let inning = eMatch.liveInning;
+                      if (inning.batsmen && inning.batsmen.length > 0) {
+                          let ns = inning.batsmen.find(b => !b.isStriker);
+                          if (ns && ns.athlete && payload.non_striker === "Active Non-Striker") payload.non_striker = ns.athlete.name;
+                      }
+                      if (inning.bowlers && inning.bowlers.length > 0 && payload.bowler === "Active Bowler") {
+                          payload.bowler = inning.bowlers[0].athlete.name;
+                      }
+                  }
+              } catch(e) {}
+          }
       }
 
       return res.status(200).json({ success: true, match_info: payload });
