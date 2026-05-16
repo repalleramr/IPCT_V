@@ -78,6 +78,7 @@ module.exports = async function (req, res) {
       // ==============================================================
       let htmlAcquired = false;
 
+      // --- TIER 1: CRICBUZZ ---
       if (!htmlAcquired) {
           try {
               let cbUrl = targetUrl;
@@ -112,6 +113,7 @@ module.exports = async function (req, res) {
           } catch (e) {}
       }
 
+      // --- TIER 2: ESPN JSON API ---
       if (!htmlAcquired) {
           try {
               const espnRes = await axios.get('https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current', { headers, timeout: 3000 });
@@ -210,23 +212,22 @@ module.exports = async function (req, res) {
               if (reqMatch) payload.required_rr = reqMatch[1];
           } catch(e) { payload.current_rr = "Error"; payload.required_rr = "Error"; }
 
-          // --- [TARGET #7] STRIKER EXTRACTION (NEW FIX) ---
+          // --- [TARGET #7] STRIKER EXTRACTION (SECURED) ---
           try {
               let foundStriker = "";
 
-              // Tactic A: Aggressive Regex for the Bat Symbol & Numbers
+              // Tactic A: Aggressive Regex for the Bat Symbol
               let starMatch = bodyText.match(/([a-zA-Z\s\-\'\.]+?)\s*\*\s*\d+\s+\d+/);
               if (starMatch && starMatch[1]) {
                   let cleanName = starMatch[1].replace(/(Batter|SR|ECO|Runs|4s|6s)/gi, '').trim();
-                  // Strip any stray lowercase letters caught at the front (like 's' in 'sSR')
-                  cleanName = cleanName.replace(/^[a-z]+\s*/, '').trim();
+                  cleanName = cleanName.replace(/^[a-z]+\s*/, '').trim(); // Fix sSR bug
                   
                   if (cleanName.length > 2 && !cleanName.toLowerCase().includes('match')) {
                       foundStriker = cleanName + " *";
                   }
               }
 
-              // Tactic B: Backup Profile Link Hunter
+              // Tactic B: Profile Link Fallback
               if (!foundStriker && $) {
                   $('a[href*="/profiles/"]').each((i, el) => {
                       let name = $(el).text().trim();
@@ -240,9 +241,43 @@ module.exports = async function (req, res) {
               payload.striker = foundStriker || "Target Engaged";
           } catch(e) { payload.striker = "Extractor Error"; }
 
-          // --- [TARGET #8] NON-STRIKER (PENDING FIX) ---
+          // --- [TARGET #8] NON-STRIKER EXTRACTION (NEW FIX) ---
           try {
-              payload.non_striker = "Off-Strike";
+              let foundNonStriker = "";
+              let strikerNameRaw = payload.striker.replace('*', '').trim(); // Remove star to compare names cleanly
+
+              if ($) {
+                  let activeBatters = [];
+                  
+                  // Hunt through the Batting Rows
+                  $('.cb-min-bat-rw').each((i, el) => {
+                      let rowTxt = $(el).text().replace(/\s+/g, ' ').trim();
+                      
+                      // Priority 1: Clean Profile Links
+                      let profName = $(el).find('a[href*="/profiles/"]').first().text().trim();
+                      if (profName && profName.length > 2) {
+                          activeBatters.push(profName);
+                      } else {
+                          // Priority 2: String Cleaner Backup
+                          let cleanText = rowTxt.replace(/(Batter|SR|ECO|Runs|4s|6s)/gi, '').replace(/^[a-z]+\s*/i, '').trim();
+                          let nameMatch = cleanText.match(/^([a-zA-Z\s\-\'\.]+?)\s*(?:\*|\d)/);
+                          if (nameMatch && nameMatch[1].trim().length > 2) {
+                              activeBatters.push(nameMatch[1].trim());
+                          }
+                      }
+                  });
+
+                  // The Subtraction Protocol
+                  for (let name of activeBatters) {
+                      // If the name is valid AND it isn't the Striker's name, it must be the Non-Striker
+                      if (name && name !== strikerNameRaw && !strikerNameRaw.includes(name)) {
+                          foundNonStriker = name;
+                          break;
+                      }
+                  }
+              }
+
+              payload.non_striker = foundNonStriker || "Off-Strike";
           } catch(e) { payload.non_striker = "Extractor Error"; }
 
           // --- [TARGET #9] BOWLER (PENDING FIX) ---
@@ -291,6 +326,9 @@ module.exports = async function (req, res) {
           if (payload.toss === "Tracking Toss Data..." || payload.toss.includes("YAHOO")) payload.toss = "Awaiting Coin Drop";
           if (payload.toss !== "Awaiting Coin Drop") payload.status = payload.toss;
       }
+
+      // --- [TARGET #14] SOURCE URL (SECURED) ---
+      // Handled natively during Phase 1 Acquisition
 
       return res.status(200).json({ success: true, match_info: payload });
 
