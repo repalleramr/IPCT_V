@@ -65,6 +65,7 @@ module.exports = async function (req, res) {
       let htmlAcquired = false;
       let timestampBuster = Date.now(); 
 
+      // Data Acquisition Phase
       if (!htmlAcquired) {
           try {
               let cbUrl = targetUrl;
@@ -94,27 +95,6 @@ module.exports = async function (req, res) {
 
       if (!htmlAcquired) {
           try {
-              let crexUrl = targetUrl.includes('crex') ? targetUrl : "";
-              if (!crexUrl && targetTeams) {
-                  const cxRes = await axios.get(`https://crex.live/fixtures/match-list?_t=${timestampBuster}`, { headers, timeout: 3000 });
-                  const $temp = cheerio.load(cxRes.data);
-                  $temp('a').each((i, el) => {
-                      let txt = $temp(el).text().toLowerCase(); let href = $temp(el).attr('href') || ""; let strictTeamCheck = txt + " " + href;
-                      if ((txt.includes('ipl') || txt.includes('indian premier league')) && href.includes('scoreboard') && matchesTeams(strictTeamCheck)) crexUrl = 'https://crex.live' + href;
-                  });
-              }
-              if (crexUrl) {
-                  let fetchUrl = crexUrl.includes('?') ? `${crexUrl}&_t=${timestampBuster}` : `${crexUrl}?_t=${timestampBuster}`;
-                  const cRes = await axios.get(fetchUrl, { headers, timeout: 3500 });
-                  $ = cheerio.load(cRes.data); $('script, style, noscript').remove();
-                  pageTitle = $('title').text() || ""; bodyText = $('body').text().replace(/\s+/g, ' ');
-                  payload.source_url = crexUrl; htmlAcquired = true;
-              }
-          } catch (e) {}
-      }
-
-      if (!htmlAcquired) {
-          try {
               const espnRes = await axios.get(`https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current?_t=${timestampBuster}`, { headers, timeout: 3000 });
               espnMatchData = espnRes.data.matches.find(m => {
                   let isIPL = (m.series?.name?.toLowerCase().includes('ipl') || m.title.toLowerCase().includes('ipl'));
@@ -132,6 +112,7 @@ module.exports = async function (req, res) {
           return res.status(200).json({ success: true, match_info: payload }); 
       }
 
+      // Assessment Phase
       try {
           let vsMatch = pageTitle.match(/([a-zA-Z0-9\s]+?\s+vs\s+[a-zA-Z0-9\s]+)/i);
           if (vsMatch) payload.title = vsMatch[1].replace(/live score/i, '').replace(/live/i, '').trim();
@@ -161,6 +142,7 @@ module.exports = async function (req, res) {
           if (payload.toss.length > 50) payload.toss = "Tracking Toss Data...";
       } catch (e) { payload.toss = "Toss Error"; }
 
+      // Live Analysis Phase
       if (payload.match_state === "live") {
           try {
               if (payload.status === "Scanning Fields..." || payload.status === "") {
@@ -189,7 +171,7 @@ module.exports = async function (req, res) {
               }
           } catch(e) { payload.current_rr = "Error"; payload.required_rr = "Error"; }
 
-          // --- STRIKER / BOWLER EXTRACTION ---
+          // STRIKER / BOWLER
           try {
               let foundStriker = "";
               let starMatch = bodyText.match(/([a-zA-Z\s\-\'\.]+?)\s*\*\s*\d+\s+\d+/);
@@ -262,7 +244,7 @@ module.exports = async function (req, res) {
           } catch(e) { payload.last_over = ["E", "R", "R", "O", "R", "!"]; }
 
           // ==========================================================
-          // [TARGET #13] THE QUANTUM BOOKMAKER ENGINE (DUAL-CORE)
+          // [TARGET #13] QUANTUM ORACLE (ODDS & PROBABILITY CALCULATOR)
           // ==========================================================
           try {
               if (payload.live_score.includes('/')) {
@@ -275,7 +257,6 @@ module.exports = async function (req, res) {
                       let overs = parseInt(oversSplit[0]); let balls = oversSplit[1] ? parseInt(oversSplit[1]) : 0;
                       let totalBalls = (overs * 6) + balls;
 
-                      // --- ADVANCED MICRO-RADAR ANALYSIS ---
                       let recentRuns = 0; let validBalls = 0; 
                       let dotBalls = 0; let boundaries = 0; let recentWicketFell = false;
                       
@@ -290,10 +271,6 @@ module.exports = async function (req, res) {
                           }
                       });
                       
-                      // Calculate Pitch/Bowling Pressure
-                      let wicketProb = "LOW";
-                      if (recentWicketFell || (dotBalls >= 3 && validBalls > 3)) wicketProb = "HIGH (Bowling Pressure)";
-                      
                       let crr = parseFloat(payload.current_rr) || (runs / totalBalls) * 6;
                       let recentRR = validBalls > 0 ? (recentRuns / validBalls) * 6 : crr;
                       let blendedRR = (recentRR * 0.6) + (crr * 0.4);
@@ -303,7 +280,7 @@ module.exports = async function (req, res) {
                       let isChase = (payload.required_rr !== "YAHOO: No REQ" && payload.required_rr !== "1st Innings" && payload.required_rr !== "Error");
                       let rrrVal = isChase ? parseFloat(payload.required_rr) : 0;
 
-                      // --- CORE 1: PHASE PREDICTION ---
+                      // --- CORE 1: PHASE MARKETS ---
                       if (isChase) {
                           payload.prediction = `CHASE ORACLE | PHASE MARKETS CLOSED (1st Innings Only)`;
                       } else {
@@ -327,28 +304,63 @@ module.exports = async function (req, res) {
                           else payload.prediction = `INNINGS ENDING \nTACTIC: ${phaseTactic}`;
                       }
 
-                      // --- CORE 2: MATCH TRADING (DYNAMIC ENTRY/EXIT MATRIX) ---
-                      let matchTactic = "";
+                      // --- CORE 2: ODDS & MATCH WINNER ALGORITHM ---
+                      let batWinProb = 50;
+                      let ballsRemaining = 120 - totalBalls;
+                      let wktsLeft = 10 - wkts;
+
                       if (isChase) {
-                          if (rrrVal > 15 || wkts >= 8) {
-                              matchTactic = `[ENTRY] 🟢 PLAY Bowling Team at prevailing odds.|[EXIT] Market closing. Ensure profit is locked on Bowling team.|[INTEL] Wicket Prob: ${wicketProb} | Chase mathematically terminal.`;
-                          } else if (rrrVal > 11 && wkts >= 5) {
-                              matchTactic = `[ENTRY] 🔴 EAT (LAY) ${batTeam} at low odds.|[EXIT] HEDGE (Shift Winner) when next wicket falls to lock profit.|[INTEL] Pressure: CRITICAL | Tail exposed to run rate.`;
-                          } else if (rrrVal <= crr + 1 && wkts < 4) {
-                              matchTactic = `[ENTRY] 🟢 PLAY (BACK) ${batTeam} on market dips.|[EXIT] HEDGE (Green Out) when odds drop further to lock profit.|[INTEL] Wicket Prob: LOW | Batters finding gaps easily.`;
-                          } else {
-                              matchTactic = `[ENTRY] 🟡 WAIT FOR SWING | Market odds are currently balanced.|[EXIT] Hold capital. Look for entry after a boundary or wicket.|[INTEL] Pressure: NEUTRAL | Awaiting momentum shift.`;
+                          // Chase Probability Engine
+                          if (wktsLeft <= 0 || (ballsRemaining <= 0 && rrrVal > 0)) batWinProb = 0.1;
+                          else if (rrrVal <= 0) batWinProb = 99.9;
+                          else {
+                              let baseProb = 50 + ((9.5 - rrrVal) * 5.5); // RRR Impact
+                              baseProb += ((wktsLeft - 5) * 4.5); // Wicket Impact
+                              if (blendedRR > rrrVal) baseProb += 5; // Momentum Shift
+                              else if (blendedRR < rrrVal - 2) baseProb -= 10;
+                              batWinProb = Math.max(2, Math.min(98, baseProb));
                           }
                       } else {
-                          // 1st Innings Bookmaking
-                          if (wkts < 3 && blendedRR > 9) {
-                              matchTactic = `[ENTRY] 🟢 PLAY (BACK) ${batTeam} on market dips.|[EXIT] HEDGE (Shift Winner) at Innings Break to guarantee profit.|[INTEL] Wicket Prob: LOW | Bowlers failing to restrict.`;
-                          } else if (wkts >= 5 || (dotBalls >= 3 && wkts >= 3)) {
-                              matchTactic = `[ENTRY] 🔴 EAT (LAY) ${batTeam} at low odds.|[EXIT] HEDGE (Green Out) immediately upon next wicket.|[INTEL] Wicket Prob: ${wicketProb} | Batters pinned down.`;
+                          // 1st Innings Probability Engine (Assumes Par 175)
+                          let parScore = 175;
+                          let projected = runs + ((120 - totalBalls) / 6) * blendedRR;
+                          let baseProb = 50 + ((projected - parScore) * 0.7);
+                          baseProb -= (wkts * 3);
+                          if (recentWicketFell) baseProb -= 5;
+                          batWinProb = Math.max(5, Math.min(95, baseProb));
+                      }
+
+                      // Implied Odds Translation
+                      let batOdds = (100 / batWinProb).toFixed(2);
+                      let bowlWinProb = 100 - batWinProb;
+                      let bowlOdds = (100 / bowlWinProb).toFixed(2);
+
+                      let oddsString = `[WIN %] ${batTeam}: ${batWinProb.toFixed(0)}% (Est. Odds: ${batOdds}) | Bowling Team: ${bowlWinProb.toFixed(0)}% (Est. Odds: ${bowlOdds})`;
+                      let matchTactic = oddsString + "|";
+
+                      // Trading Directives based on dynamic odds
+                      if (isChase) {
+                          if (batWinProb < 10) {
+                              matchTactic += `[ENTRY] 🟢 PLAY Bowling Team | Chase mathematically terminal.|[EXIT] Market closing.`;
+                          } else if (batWinProb > 85) {
+                              matchTactic += `[ENTRY] 🔴 EAT (LAY) ${batTeam} @ ${batOdds} | Market Overvalued. Risk small to win big if wicket falls.|[EXIT] HEDGE on next wicket to lock profit.`;
+                          } else if (blendedRR >= rrrVal && wktsLeft >= 6) {
+                              matchTactic += `[ENTRY] 🟢 PLAY (BACK) ${batTeam} @ ${batOdds} | Strong chase momentum.|[EXIT] HEDGE when odds drop to ~1.15.`;
                           } else {
-                              matchTactic = `[ENTRY] 🟡 HOLD POSITION | Consolidation phase active.|[EXIT] Do not commit funds until odds swing significantly.|[INTEL] Pressure: BUILDING | Teams establishing base.`;
+                              matchTactic += `[ENTRY] 🟡 WAIT FOR SWING | Market is balanced.|[EXIT] Hold capital.`;
+                          }
+                      } else {
+                          if (batWinProb > 85) {
+                              matchTactic += `[ENTRY] 🔴 EAT (LAY) ${batTeam} @ ${batOdds} | Peak odds trap. Bowling team will bounce back.|[EXIT] HEDGE on wicket.`;
+                          } else if (wkts < 3 && blendedRR > 9) {
+                              matchTactic += `[ENTRY] 🟢 PLAY (BACK) ${batTeam} @ ${batOdds} | Massive target incoming.|[EXIT] HEDGE at Innings Break.`;
+                          } else if (wkts >= 5 || (dotBalls >= 3 && wkts >= 3)) {
+                              matchTactic += `[ENTRY] 🔴 EAT (LAY) ${batTeam} @ ${batOdds} | Bowling team dominating.|[EXIT] HEDGE immediately upon next wicket.`;
+                          } else {
+                              matchTactic += `[ENTRY] 🟡 HOLD POSITION | Consolidation phase active.|[EXIT] Do not commit funds until odds swing.`;
                           }
                       }
+                      
                       payload.match_prediction = matchTactic;
 
                   } else {
