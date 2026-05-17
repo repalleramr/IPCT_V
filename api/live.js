@@ -304,17 +304,10 @@ module.exports = async function (req, res) {
                       let rrrVal = isChase ? parseFloat(payload.required_rr) : 0;
 
                       // --- CORE 1: PHASE PREDICTION ---
-                      let phaseTactic = "";
                       if (isChase) {
-                          if (rrrVal >= 36) phaseTactic = "⚫ TERMINAL - MATHEMATICALLY IMPOSSIBLE";
-                          else if (rrrVal >= 14) phaseTactic = "🔴 EAT (LAY) - EXTREME CHASE PRESSURE";
-                          else if (wkts >= 7 || (wkts >= 5 && blendedRR < rrrVal)) phaseTactic = "🔴 EAT (LAY) - COLLAPSING CHASE";
-                          else if (recentWicketFell) phaseTactic = "🟡 HOLD - CHASE DESTABILIZED";
-                          else if (blendedRR >= rrrVal && wkts <= 4) phaseTactic = "🟢 PLAY (BACK) - DOMINATING CHASE";
-                          else phaseTactic = "🟡 HOLD - CHASE ACTIVE";
-
-                          payload.prediction = `CHASE ORACLE | TACTIC: ${phaseTactic}`;
+                          payload.prediction = `CHASE ORACLE | PHASE MARKETS CLOSED (1st Innings Only)`;
                       } else {
+                          let phaseTactic = "";
                           let projections = [];
                           let milestones = [6, 10, 15, 20];
                           for (let m of milestones) {
@@ -334,26 +327,26 @@ module.exports = async function (req, res) {
                           else payload.prediction = `INNINGS ENDING \nTACTIC: ${phaseTactic}`;
                       }
 
-                      // --- CORE 2: MATCH TRADING (ENTRY/EXIT HEDGING MATRIX) ---
+                      // --- CORE 2: MATCH TRADING (DYNAMIC ENTRY/EXIT MATRIX) ---
                       let matchTactic = "";
                       if (isChase) {
                           if (rrrVal > 15 || wkts >= 8) {
-                              matchTactic = `[ENTRY] 🟢 PLAY Bowling Team | Chase mathematically terminating.|[EXIT] Market closing. Ensure profit is locked on Bowling team.|[INTEL] Wicket Prob: ${wicketProb} | Boundaries dried up.`;
+                              matchTactic = `[ENTRY] 🟢 PLAY Bowling Team at prevailing odds.|[EXIT] Market closing. Ensure profit is locked on Bowling team.|[INTEL] Wicket Prob: ${wicketProb} | Chase mathematically terminal.`;
                           } else if (rrrVal > 11 && wkts >= 5) {
-                              matchTactic = `[ENTRY] 🔴 EAT (LAY) ${batTeam} @ 1.15-1.25 | Take the risk here.|[EXIT] HEDGE (Shift Winner) when next wicket falls to lock profit.|[INTEL] Pressure: CRITICAL | Tail exposed to run rate.`;
+                              matchTactic = `[ENTRY] 🔴 EAT (LAY) ${batTeam} at low odds.|[EXIT] HEDGE (Shift Winner) when next wicket falls to lock profit.|[INTEL] Pressure: CRITICAL | Tail exposed to run rate.`;
                           } else if (rrrVal <= crr + 1 && wkts < 4) {
-                              matchTactic = `[ENTRY] 🟢 PLAY (BACK) ${batTeam} @ 1.30+ | Strong chase momentum.|[EXIT] HEDGE (Green Out) when odds drop to 1.12 to lock profit.|[INTEL] Wicket Prob: LOW | Batters finding gaps easily.`;
+                              matchTactic = `[ENTRY] 🟢 PLAY (BACK) ${batTeam} on market dips.|[EXIT] HEDGE (Green Out) when odds drop further to lock profit.|[INTEL] Wicket Prob: LOW | Batters finding gaps easily.`;
                           } else {
-                              matchTactic = `[ENTRY] 🟡 WAIT FOR SWING | Market is currently balanced.|[EXIT] Hold capital. Look for entry after a boundary or wicket.|[INTEL] Pressure: NEUTRAL | Awaiting momentum shift.`;
+                              matchTactic = `[ENTRY] 🟡 WAIT FOR SWING | Market odds are currently balanced.|[EXIT] Hold capital. Look for entry after a boundary or wicket.|[INTEL] Pressure: NEUTRAL | Awaiting momentum shift.`;
                           }
                       } else {
                           // 1st Innings Bookmaking
                           if (wkts < 3 && blendedRR > 9) {
-                              matchTactic = `[ENTRY] 🟢 PLAY (BACK) ${batTeam} @ 1.40+ | Massive target incoming.|[EXIT] HEDGE (Shift Winner) at Innings Break to guarantee profit.|[INTEL] Wicket Prob: LOW | Bowlers failing to restrict.`;
+                              matchTactic = `[ENTRY] 🟢 PLAY (BACK) ${batTeam} on market dips.|[EXIT] HEDGE (Shift Winner) at Innings Break to guarantee profit.|[INTEL] Wicket Prob: LOW | Bowlers failing to restrict.`;
                           } else if (wkts >= 5 || (dotBalls >= 3 && wkts >= 3)) {
-                              matchTactic = `[ENTRY] 🔴 EAT (LAY) ${batTeam} @ 1.30-1.40 | Bowling team dominating.|[EXIT] HEDGE (Green Out) immediately upon next wicket.|[INTEL] Wicket Prob: ${wicketProb} | Batters pinned down.`;
+                              matchTactic = `[ENTRY] 🔴 EAT (LAY) ${batTeam} at low odds.|[EXIT] HEDGE (Green Out) immediately upon next wicket.|[INTEL] Wicket Prob: ${wicketProb} | Batters pinned down.`;
                           } else {
-                              matchTactic = `[ENTRY] 🟡 HOLD POSITION | Consolidation phase active.|[EXIT] Do not commit funds until 14th over mark.|[INTEL] Pressure: BUILDING | Teams establishing base.`;
+                              matchTactic = `[ENTRY] 🟡 HOLD POSITION | Consolidation phase active.|[EXIT] Do not commit funds until odds swing significantly.|[INTEL] Pressure: BUILDING | Teams establishing base.`;
                           }
                       }
                       payload.match_prediction = matchTactic;
