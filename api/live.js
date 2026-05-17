@@ -65,7 +65,7 @@ module.exports = async function (req, res) {
       let htmlAcquired = false;
       let timestampBuster = Date.now(); 
 
-      // Data Acquisition Phase
+      // --- ACQUISITION ---
       if (!htmlAcquired) {
           try {
               let cbUrl = targetUrl;
@@ -95,6 +95,27 @@ module.exports = async function (req, res) {
 
       if (!htmlAcquired) {
           try {
+              let crexUrl = targetUrl.includes('crex') ? targetUrl : "";
+              if (!crexUrl && targetTeams) {
+                  const cxRes = await axios.get(`https://crex.live/fixtures/match-list?_t=${timestampBuster}`, { headers, timeout: 3000 });
+                  const $temp = cheerio.load(cxRes.data);
+                  $temp('a').each((i, el) => {
+                      let txt = $temp(el).text().toLowerCase(); let href = $temp(el).attr('href') || ""; let strictTeamCheck = txt + " " + href;
+                      if ((txt.includes('ipl') || txt.includes('indian premier league')) && href.includes('scoreboard') && matchesTeams(strictTeamCheck)) crexUrl = 'https://crex.live' + href;
+                  });
+              }
+              if (crexUrl) {
+                  let fetchUrl = crexUrl.includes('?') ? `${crexUrl}&_t=${timestampBuster}` : `${crexUrl}?_t=${timestampBuster}`;
+                  const cRes = await axios.get(fetchUrl, { headers, timeout: 3500 });
+                  $ = cheerio.load(cRes.data); $('script, style, noscript').remove();
+                  pageTitle = $('title').text() || ""; bodyText = $('body').text().replace(/\s+/g, ' ');
+                  payload.source_url = crexUrl; htmlAcquired = true;
+              }
+          } catch (e) {}
+      }
+
+      if (!htmlAcquired) {
+          try {
               const espnRes = await axios.get(`https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current?_t=${timestampBuster}`, { headers, timeout: 3000 });
               espnMatchData = espnRes.data.matches.find(m => {
                   let isIPL = (m.series?.name?.toLowerCase().includes('ipl') || m.title.toLowerCase().includes('ipl'));
@@ -112,7 +133,7 @@ module.exports = async function (req, res) {
           return res.status(200).json({ success: true, match_info: payload }); 
       }
 
-      // Assessment Phase
+      // --- ASSESSMENT ---
       try {
           let vsMatch = pageTitle.match(/([a-zA-Z0-9\s]+?\s+vs\s+[a-zA-Z0-9\s]+)/i);
           if (vsMatch) payload.title = vsMatch[1].replace(/live score/i, '').replace(/live/i, '').trim();
@@ -142,7 +163,7 @@ module.exports = async function (req, res) {
           if (payload.toss.length > 50) payload.toss = "Tracking Toss Data...";
       } catch (e) { payload.toss = "Toss Error"; }
 
-      // Live Analysis Phase
+      // --- LIVE DATA EXTRACTION ---
       if (payload.match_state === "live") {
           try {
               if (payload.status === "Scanning Fields..." || payload.status === "") {
@@ -171,7 +192,6 @@ module.exports = async function (req, res) {
               }
           } catch(e) { payload.current_rr = "Error"; payload.required_rr = "Error"; }
 
-          // STRIKER / BOWLER
           try {
               let foundStriker = "";
               let starMatch = bodyText.match(/([a-zA-Z\s\-\'\.]+?)\s*\*\s*\d+\s+\d+/);
@@ -244,7 +264,7 @@ module.exports = async function (req, res) {
           } catch(e) { payload.last_over = ["E", "R", "R", "O", "R", "!"]; }
 
           // ==========================================================
-          // [TARGET #13] QUANTUM ORACLE (ODDS & PROBABILITY CALCULATOR)
+          // [TARGET #13] QUANTUM ORACLE (EXPONENTIAL MATH FIX)
           // ==========================================================
           try {
               if (payload.live_score.includes('/')) {
@@ -270,6 +290,9 @@ module.exports = async function (req, res) {
                               if (val === 4 || val === 6) boundaries++;
                           }
                       });
+                      
+                      let wicketProb = "LOW";
+                      if (recentWicketFell || (dotBalls >= 3 && validBalls > 3)) wicketProb = "HIGH (Bowling Pressure)";
                       
                       let crr = parseFloat(payload.current_rr) || (runs / totalBalls) * 6;
                       let recentRR = validBalls > 0 ? (recentRuns / validBalls) * 6 : crr;
@@ -304,29 +327,46 @@ module.exports = async function (req, res) {
                           else payload.prediction = `INNINGS ENDING \nTACTIC: ${phaseTactic}`;
                       }
 
-                      // --- CORE 2: ODDS & MATCH WINNER ALGORITHM ---
+                      // --- CORE 2: ODDS & MATCH WINNER ALGORITHM (EXPONENTIAL FIX) ---
                       let batWinProb = 50;
                       let ballsRemaining = 120 - totalBalls;
-                      let wktsLeft = 10 - wkts;
-
+                      
                       if (isChase) {
-                          // Chase Probability Engine
-                          if (wktsLeft <= 0 || (ballsRemaining <= 0 && rrrVal > 0)) batWinProb = 0.1;
-                          else if (rrrVal <= 0) batWinProb = 99.9;
-                          else {
-                              let baseProb = 50 + ((9.5 - rrrVal) * 5.5); // RRR Impact
-                              baseProb += ((wktsLeft - 5) * 4.5); // Wicket Impact
-                              if (blendedRR > rrrVal) baseProb += 5; // Momentum Shift
-                              else if (blendedRR < rrrVal - 2) baseProb -= 10;
-                              batWinProb = Math.max(2, Math.min(98, baseProb));
+                          if (wkts >= 10 || (ballsRemaining <= 0 && rrrVal > 0)) {
+                              batWinProb = 1;
+                          } else if (rrrVal <= 0) {
+                              batWinProb = 99;
+                          } else {
+                              let rrDiff = crr - rrrVal;
+                              let baseProb = 50;
+                              
+                              // Penalty/Bonus for Required Rate
+                              if (rrrVal > 11) baseProb -= (rrrVal - 11) * 7;
+                              else if (rrrVal < 8) baseProb += (8 - rrrVal) * 5;
+                              
+                              // Exponential Leverage: Wickets in hand relative to overs played
+                              let parWickets = (totalBalls / 120) * 10;
+                              let wicketDiff = parWickets - wkts;
+                              baseProb += (wicketDiff * 8); // Huge swing for retained wickets
+                              
+                              // Momentum (CRR vs RRR)
+                              if (rrDiff > 0) baseProb += (rrDiff * 6);
+                              else baseProb += (rrDiff * 7);
+                              
+                              // Cap to match real-world bookmaker margins (rarely goes beyond 96%)
+                              batWinProb = Math.max(4, Math.min(96, baseProb)); 
                           }
                       } else {
-                          // 1st Innings Probability Engine (Assumes Par 175)
-                          let parScore = 175;
-                          let projected = runs + ((120 - totalBalls) / 6) * blendedRR;
-                          let baseProb = 50 + ((projected - parScore) * 0.7);
-                          baseProb -= (wkts * 3);
-                          if (recentWicketFell) baseProb -= 5;
+                          // 1st Innings 
+                          let parScore = 180; // Modern T20 Par
+                          let projected = runs + (ballsRemaining / 6) * blendedRR;
+                          let baseProb = 50 + ((projected - parScore) * 1.2);
+                          
+                          let parWickets = (totalBalls / 120) * 10;
+                          let wicketDiff = parWickets - wkts;
+                          baseProb += (wicketDiff * 5);
+                          
+                          if (recentWicketFell) baseProb -= 8;
                           batWinProb = Math.max(5, Math.min(95, baseProb));
                       }
 
@@ -342,15 +382,15 @@ module.exports = async function (req, res) {
                       if (isChase) {
                           if (batWinProb < 10) {
                               matchTactic += `[ENTRY] 🟢 PLAY Bowling Team | Chase mathematically terminal.|[EXIT] Market closing.`;
-                          } else if (batWinProb > 85) {
-                              matchTactic += `[ENTRY] 🔴 EAT (LAY) ${batTeam} @ ${batOdds} | Market Overvalued. Risk small to win big if wicket falls.|[EXIT] HEDGE on next wicket to lock profit.`;
-                          } else if (blendedRR >= rrrVal && wktsLeft >= 6) {
+                          } else if (batWinProb > 88) {
+                              matchTactic += `[ENTRY] 🔴 EAT (LAY) ${batTeam} @ ${batOdds} | Leverage Trap! Risk minimal capital to win big if a wicket falls.|[EXIT] HEDGE on next wicket to lock profit.`;
+                          } else if (batWinProb > 65) {
                               matchTactic += `[ENTRY] 🟢 PLAY (BACK) ${batTeam} @ ${batOdds} | Strong chase momentum.|[EXIT] HEDGE when odds drop to ~1.15.`;
                           } else {
                               matchTactic += `[ENTRY] 🟡 WAIT FOR SWING | Market is balanced.|[EXIT] Hold capital.`;
                           }
                       } else {
-                          if (batWinProb > 85) {
+                          if (batWinProb > 88) {
                               matchTactic += `[ENTRY] 🔴 EAT (LAY) ${batTeam} @ ${batOdds} | Peak odds trap. Bowling team will bounce back.|[EXIT] HEDGE on wicket.`;
                           } else if (wkts < 3 && blendedRR > 9) {
                               matchTactic += `[ENTRY] 🟢 PLAY (BACK) ${batTeam} @ ${batOdds} | Massive target incoming.|[EXIT] HEDGE at Innings Break.`;
