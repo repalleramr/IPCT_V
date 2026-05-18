@@ -17,21 +17,8 @@ module.exports = async function (req, res) {
   let rawDateStr = req.query.time || ""; 
   let targetDate = rawDateStr.split('(')[0].trim().toLowerCase();
   
-  let now = new Date();
-  let options = { timeZone: 'Asia/Kolkata', month: 'short', day: 'numeric' };
-  let todayIST = now.toLocaleString('en-US', options).toLowerCase();
+  // Temporal Lock Removed per Commander's orders.
   
-  if (targetDate && targetDate !== todayIST) {
-      let lockdownPayload = {
-          title: "UPLINK DENIED", status: "Select today match only", match_state: "standby",
-          live_score: "Out of Bounds", current_rr: "N/A", required_rr: "N/A",
-          striker: "N/A", non_striker: "N/A", bowler: "N/A", toss: "N/A", 
-          venue: "Temporal Lock Active", last_over: ["-", "-", "-", "-", "-", "-"],
-          prediction: "Select today match only", match_prediction: "", source_url: "Rejected by Firewall"
-      };
-      return res.status(200).json({ success: false, error: "Temporal mismatch", match_info: lockdownPayload });
-  }
-
   const headers = { 
       'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-G991U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
@@ -186,7 +173,7 @@ module.exports = async function (req, res) {
               }
           } catch(e) { payload.status = "Status Error"; }
 
-          // FIX 1: SCORE EXTRACTION
+          // SCORE EXTRACTION
           try {
               let scoreMatch = pageTitle.match(/([A-Z]{2,4}\s\d+[\/\-]\d+\s\([^)]+\))/);
               if (!scoreMatch) scoreMatch = bodyText.match(/([A-Z]{2,4}\s\d+[\/\-]\d+\s\([^)]+\))/);
@@ -211,59 +198,64 @@ module.exports = async function (req, res) {
           } catch(e) { payload.current_rr = "Error"; payload.required_rr = "Error"; }
 
           // ==========================================
-          // FIX 7 FINAL: DECIMAL-IGNORING REGEX
+          // FIX 7 & 8: THE UN-MASHER EXTRACTOR
           // ==========================================
           try {
               let foundStriker = "";
               let foundNonStriker = "";
               
-              // Mathematically matches: Name + Numbers + (Numbers)
-              // The \d{1,3} inside the parens ensures NO DECIMALS are allowed.
-              // This completely ignores the match score (e.g. 163/5 (18.2)).
-              let batterRegex = /([A-Z][a-zA-Z\s\.\-']{2,20}?)\s*(\d{1,3})\s*\(\s*\d{1,3}\s*\)/g;
+              // 1. UN-MASH THE HTML TEXT: Separates touching words (e.g. VeerA -> Veer A)
+              let safeText = bodyText
+                  .replace(/([a-z])([A-Z])/g, '$1 $2')
+                  .replace(/([a-zA-Z])(\d)/g, '$1 $2');
               
-              let matches = [...bodyText.matchAll(batterRegex)];
+              // 2. Isolate the search area to just the Batter table
+              let batIdx = safeText.search(/Batter|Batsman/i);
+              let searchArea = batIdx !== -1 ? safeText.substring(batIdx, batIdx + 300) : safeText;
+
+              // 3. Match Name + Runs + Balls
+              let batterRegex = /([A-Z][a-zA-Z\s\.\-']{2,25}?)\s+(\d{1,3})\s*\(\s*\d{1,3}\s*\)/g;
+              let matches = [...searchArea.matchAll(batterRegex)];
               let validBatters = [];
 
               if (matches.length > 0) {
-                  // Filter out bad words
                   validBatters = matches.filter(m => {
-                      let name = m[1].toLowerCase().trim();
-                      return !name.includes('total') && 
-                             !name.includes('score') && 
-                             !name.includes('extra') && 
-                             !name.includes('run') && 
-                             !name.includes('over') &&
-                             !name.includes('target') &&
-                             name.length > 2;
+                      let name = m[1].trim();
+                      if (/[A-Z]{3,}/.test(name)) return false; // Shreds SSRP, REQ, etc.
+                      let lower = name.toLowerCase();
+                      return !lower.includes('total') && !lower.includes('score') && !lower.includes('run') && !lower.includes('over') && name.length > 2;
                   });
               }
 
+              let cleanExtractedName = (str) => {
+                  let words = str.replace(/\s+/g, ' ').trim().split(' ');
+                  return words.slice(-2).join(' '); // Keeps only the First & Last Name
+              };
+
               if (validBatters.length > 0) {
-                  foundStriker = validBatters[0][1].trim();
+                  foundStriker = cleanExtractedName(validBatters[0][1]);
                   if (validBatters.length > 1) {
-                      foundNonStriker = validBatters[1][1].trim();
+                      foundNonStriker = cleanExtractedName(validBatters[1][1]);
                   }
               }
 
-              // Fallback for Cricbuzz structure
+              // Fallback
               if (!foundStriker) {
-                  let starMatch = bodyText.match(/([a-zA-Z\s\-\'\.]+?)\s*\*\s*\d+\s+\d+/);
+                  let starMatch = safeText.match(/([a-zA-Z\s\-\'\.]+?)\s*\*\s*\d+\s+\d+/);
                   if (starMatch && starMatch[1]) {
-                      foundStriker = starMatch[1].replace(/(Batter|SR|ECO|Runs|4s|6s)/gi, '').trim();
+                      let cleanFallback = starMatch[1].replace(/(Batter|SR|ECO|Runs|4s|6s)/gi, '').replace(/[A-Z]{3,}/g, '').trim();
+                      foundStriker = cleanExtractedName(cleanFallback);
                   }
               }
 
-              // Apply formatting
               if (foundStriker) {
-                  foundStriker = foundStriker.replace(/\*/g, '').replace(/\s+/g, ' ').trim();
                   payload.striker = foundStriker + " *";
               } else {
                   payload.striker = "Target Engaged";
               }
 
               if (foundNonStriker) {
-                  payload.non_striker = foundNonStriker.replace(/\*/g, '').replace(/\s+/g, ' ').trim();
+                  payload.non_striker = foundNonStriker;
               } else {
                   payload.non_striker = "Off-Strike";
               }
@@ -272,28 +264,24 @@ module.exports = async function (req, res) {
               payload.striker = "Extractor Error"; 
               payload.non_striker = "Extractor Error";
           }
-          // ==========================================
 
+          // ==========================================
+          // FIX 9: BOWLER UN-MASHER
+          // ==========================================
           try {
-              let foundBowler = ""; let strikerRaw = payload.striker.replace(/\*/g, '').trim(); let nonStrikerRaw = payload.non_striker.trim();
-              if ($) {
-                  let allProfileNames = [];
-                  $('a[href*="/profiles/"]').each((i, el) => {
-                      let name = $(el).text().replace(/\*/g, '').trim();
-                      if (name.length > 2 && !allProfileNames.includes(name)) allProfileNames.push(name);
-                  });
-                  let nonBatters = allProfileNames.filter(name => !strikerRaw.includes(name) && !name.includes(strikerRaw) && !nonStrikerRaw.includes(name) && !name.includes(nonStrikerRaw) );
-                  if (nonBatters.length > 0) foundBowler = nonBatters[0];
+              let safeText = bodyText.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([a-zA-Z])(\d)/g, '$1 $2');
+              let bowIdx = safeText.search(/Bowler/i);
+              let bowArea = bowIdx !== -1 ? safeText.substring(bowIdx, bowIdx + 200) : safeText;
+              
+              let bowMatch = bowArea.match(/([A-Z][a-zA-Z\s\.\-']{2,25}?)\s+(\d{1,2}\s*\-\s*\d{1,3}|\d{1,2}\s*\.\s*\d{1,2}\s+\d)/);
+              
+              if (bowMatch && bowMatch[1]) {
+                  let name = bowMatch[1].replace(/(Econ|ECO|Overs|Runs|Wickets|Bowler)/gi, '').replace(/[A-Z]{3,}/g, '').trim();
+                  let words = name.replace(/\s+/g, ' ').trim().split(' ');
+                  payload.bowler = words.slice(-2).join(' ');
+              } else {
+                  payload.bowler = "Active Bowler";
               }
-              if (!foundBowler) {
-                  let ecoMatch = bodyText.match(/ECO\s+([a-zA-Z\s\-\'\.]+?)\s*\d/i);
-                  if (ecoMatch && ecoMatch[1]) {
-                      let cleanName = ecoMatch[1].replace(/(Bowler|Batter|SR|ECO|\*)/gi, '').trim();
-                      if (cleanName.length > 2) foundBowler = cleanName;
-                  }
-              }
-              if (foundBowler) foundBowler = foundBowler.replace(/\*/g, '').trim();
-              payload.bowler = foundBowler || "Active Bowler";
           } catch(e) { payload.bowler = "Extractor Error"; }
 
           // LAST OVER EXTRACTOR
