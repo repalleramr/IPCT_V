@@ -220,106 +220,115 @@ module.exports = async function (req, res) {
           } catch(e) { payload.current_rr = "Error"; payload.required_rr = "Error"; }
 
           // ==========================================
-          // FIX 7: STRIKER EXTRACTION (V4 - THE ANCHOR METHOD)
+          // FIX 7, 8, 9: THE OMNI-EXTRACTOR (V6 - LIVE BLOCK ISOLATION)
           // ==========================================
           try {
-              let foundStriker = "";
+              let batterBlock = "";
+              let bowlerBlock = "";
               
-              // Find where the Batter table starts in the raw text
-              let batterIdx = bodyText.search(/Batter|Batsman/i);
+              // 1. ISOLATE THE LIVE BATTER WIDGET
+              // We look for the exact table headers and grab everything until P'ship or Bowler
+              let liveWidgetMatch = bodyText.match(/(?:Batter|Batsman)\s+R\(B\)\s+4s\s+6s\s+SR\s+(.*?)(?:P\'ship|Partnership|Bowler)/i);
               
-              if (batterIdx !== -1) {
-                  // Grab the immediate 150 characters after "Batter" to isolate the first row
-                  let chunk = bodyText.substring(batterIdx, batterIdx + 150);
-                  
-                  // Look for the exact shape: [Any Text] [Runs] ([Balls])
-                  let runBallMatch = chunk.match(/([a-zA-Z\s\-\'\.]+?)\s+\d{1,3}\s*\(\s*\d{1,3}\s*\)/);
-                  
-                  if (runBallMatch && runBallMatch[1]) {
-                      let rawName = runBallMatch[1];
-                      // Surgically delete the table headers that get stuck to the name
-                      foundStriker = rawName.replace(/(Batter|Batsman|R\s*\(\s*B\s*\)|4s|6s|SR|S\.R\.?)/gi, '').trim();
+              if (liveWidgetMatch && liveWidgetMatch[1]) {
+                  batterBlock = liveWidgetMatch[1];
+              } else {
+                  // Fallback: split by P'ship, but take the LAST one in case there are multiple
+                  let pIndex = bodyText.lastIndexOf("P'ship");
+                  if (pIndex !== -1) {
+                      batterBlock = bodyText.substring(Math.max(0, pIndex - 200), pIndex);
+                  } else {
+                      batterBlock = bodyText;
                   }
               }
 
-              // Generic Fallback if Anchor fails
-              if (!foundStriker) {
+              // 2. ISOLATE THE LIVE BOWLER WIDGET
+              let bowWidgetMatch = bodyText.match(/Bowler\s+W-R\s+Overs\s+Econ\s+(.*?)(?:Recent|Fall of|Match Info|Current Partnership)/i);
+              if (bowWidgetMatch && bowWidgetMatch[1]) {
+                  bowlerBlock = bowWidgetMatch[1];
+              } else {
+                  let bIndex = bodyText.lastIndexOf("Bowler");
+                  if (bIndex !== -1) {
+                      bowlerBlock = bodyText.substring(bIndex, bIndex + 150);
+                  } else {
+                      bowlerBlock = bodyText;
+                  }
+              }
+
+              // TARGET 7 & 8: EXTRACT BATTERS FROM ISOLATED BLOCK
+              // Matches exact math shape: Name followed by Runs(Balls) 
+              let batterMatches = [...batterBlock.matchAll(/([a-zA-Z\s\-\'\.\*]+?)\s+(\d{1,3})\s*\(\s*\d{1,3}\s*\)/g)];
+              
+              let cleanName = (name) => {
+                  return name.replace(/(Batter|Batsman|SR|ECO|R\s*\(\s*B\s*\)|4s|6s|S\.R\.?)/gi, '').trim();
+              };
+
+              if (batterMatches.length >= 2) {
+                  // Grab the LAST two found in this specific block to avoid previous wickets
+                  let b1 = cleanName(batterMatches[batterMatches.length - 2][1]);
+                  let b2 = cleanName(batterMatches[batterMatches.length - 1][1]);
+                  
+                  // Ensure names aren't excessively long (catching garbage text)
+                  if(b1.split(' ').length > 3) b1 = b1.split(' ').slice(-2).join(' ');
+                  if(b2.split(' ').length > 3) b2 = b2.split(' ').slice(-2).join(' ');
+
+                  payload.striker = b1.replace(/\*/g, '').trim() + " *";
+                  payload.non_striker = b2.replace(/\*/g, '').trim();
+              } else if (batterMatches.length === 1) {
+                  let b1 = cleanName(batterMatches[0][1]);
+                  if(b1.split(' ').length > 3) b1 = b1.split(' ').slice(-2).join(' ');
+                  
+                  payload.striker = b1.replace(/\*/g, '').trim() + " *";
+                  payload.non_striker = "Off-Strike";
+              } else {
                   let starMatch = bodyText.match(/([a-zA-Z\s\-\'\.]+?)\s*\*\s*\d+\s+\d+/);
                   if (starMatch && starMatch[1]) {
-                      foundStriker = starMatch[1].replace(/(Batter|SR|ECO|Runs|4s|6s)/gi, '').trim();
+                      payload.striker = cleanName(starMatch[1]).replace(/\*/g, '').trim() + " *";
+                  } else {
+                      payload.striker = "Target Engaged";
                   }
+                  payload.non_striker = "Off-Strike";
               }
 
-              // Cleanup and Formatting
-              if (foundStriker && foundStriker.length > 2) {
-                  // If it grabbed too much text, cut it down to the last two words (e.g., S Samson)
-                  let words = foundStriker.split(/\s+/);
-                  if (words.length > 3) foundStriker = words.slice(-2).join(" ");
-                  
-                  foundStriker = foundStriker.replace(/\*/g, '').trim() + " *";
+              // TARGET 9: EXTRACT BOWLER FROM ISOLATED BLOCK
+              // Look for Name before W-R shape: e.g. "P Hinge 0-5 0.4"
+              let bowMatch = bowlerBlock.match(/([a-zA-Z\s\-\'\.\*]+?)\s+(\d{1,2}\-\d{1,3}|\d{1,2}\.\d{1,2}\s+\d)/);
+              if (bowMatch && bowMatch[1]) {
+                  let rawBowler = bowMatch[1].replace(/(Bowler|W-R|Overs|Econ)/gi, '').replace(/\*/g, '').trim();
+                  if(rawBowler.split(' ').length > 3) rawBowler = rawBowler.split(' ').slice(-2).join(' ');
+                  payload.bowler = rawBowler || "Active Bowler";
+              } else {
+                  payload.bowler = "Active Bowler";
               }
-              
-              payload.striker = foundStriker || "Target Engaged";
+
           } catch(e) { 
               payload.striker = "Extractor Error"; 
+              payload.non_striker = "Error";
+              payload.bowler = "Error";
           }
           // ==========================================
 
-          // UNTOUCHED: TARGETS 8 & 9 (Non-Striker / Bowler)
-          try {
-              let foundNonStriker = ""; let strikerNameRaw = payload.striker.replace(/\*/g, '').trim(); 
-              if ($) {
-                  let allNames = [];
-                  $('a[href*="/profiles/"]').each((i, el) => {
-                      let name = $(el).text().replace(/\*/g, '').trim();
-                      if (name.length > 2 && !allNames.includes(name)) allNames.push(name);
-                  });
-                  if (allNames.length >= 2) {
-                      if (strikerNameRaw.includes(allNames[0]) || allNames[0].includes(strikerNameRaw)) foundNonStriker = allNames[1];
-                      else foundNonStriker = allNames[0]; 
-                  }
-              }
-              if (!foundNonStriker) {
-                  let matchBlock = bodyText.match(/SR\s+(.+?)\s+Bowler/i);
-                  if (matchBlock) {
-                      let nameMatches = [...matchBlock[1].matchAll(/([a-zA-Z\s\-\'\.]+?)\s*(?:\*|\d{1,3}\s+\d{1,3})/g)];
-                      for (let m of nameMatches) {
-                          let possibleName = m[1].replace(/\*/g, '').trim();
-                          if (possibleName.length > 2 && !strikerNameRaw.includes(possibleName) && !possibleName.includes(strikerNameRaw)) { foundNonStriker = possibleName; break; }
-                      }
-                  }
-              }
-              payload.non_striker = foundNonStriker || "Off-Strike";
-          } catch(e) { payload.non_striker = "Extractor Error"; }
-
-          try {
-              let foundBowler = ""; let strikerRaw = payload.striker.replace(/\*/g, '').trim(); let nonStrikerRaw = payload.non_striker.trim();
-              if ($) {
-                  let allProfileNames = [];
-                  $('a[href*="/profiles/"]').each((i, el) => {
-                      let name = $(el).text().replace(/\*/g, '').trim();
-                      if (name.length > 2 && !allProfileNames.includes(name)) allProfileNames.push(name);
-                  });
-                  let nonBatters = allProfileNames.filter(name => !strikerRaw.includes(name) && !name.includes(strikerRaw) && !nonStrikerRaw.includes(name) && !name.includes(nonStrikerRaw) );
-                  if (nonBatters.length > 0) foundBowler = nonBatters[0];
-              }
-              if (!foundBowler) {
-                  let ecoMatch = bodyText.match(/ECO\s+([a-zA-Z\s\-\'\.]+?)\s*\d/i);
-                  if (ecoMatch && ecoMatch[1]) {
-                      let cleanName = ecoMatch[1].replace(/(Bowler|Batter|SR|ECO|\*)/gi, '').trim();
-                      if (cleanName.length > 2) foundBowler = cleanName;
-                  }
-              }
-              if (foundBowler) foundBowler = foundBowler.replace(/\*/g, '').trim();
-              payload.bowler = foundBowler || "Active Bowler";
-          } catch(e) { payload.bowler = "Extractor Error"; }
-
-          // LAST OVER EXTRACTOR
+          // ==========================================
+          // FIX 12: LAST OVER EXTRACTOR 
+          // ==========================================
           try {
               let recentTextMatch = bodyText.match(/Recent\s*:\s*([W0-9NbLwd|\s]+)/i);
-              if (recentTextMatch) payload.last_over = recentTextMatch[1].split(/[|\s]+/).filter(b => b.trim()).slice(-6);
-              else payload.last_over = ["-", "-", "-", "-", "-", "-"];
+              if (recentTextMatch) {
+                  payload.last_over = recentTextMatch[1].split(/[|\s]+/).filter(b => b.trim()).slice(-6);
+              } else {
+                  // Crex specific: "Over 2 1 0 0 4" 
+                  let overMatches = [...bodyText.matchAll(/Over\s+\d+\s+([W0-9Nbwd\s]+?)(?:Over|=|$)/gi)];
+                  if (overMatches.length > 0) {
+                      let lastOverStr = overMatches[overMatches.length - 1][1];
+                      let arr = lastOverStr.split(/\s+/).filter(b => b.trim() && !b.includes('='));
+                      payload.last_over = arr.slice(-6);
+                      if (payload.last_over.length === 0) payload.last_over = ["-", "-", "-", "-", "-", "-"];
+                  } else {
+                      payload.last_over = ["-", "-", "-", "-", "-", "-"];
+                  }
+              }
           } catch(e) { payload.last_over = ["E", "R", "R", "O", "R", "!"]; }
+          // ==========================================
 
           // ==========================================================
           // [TARGET #13] TRUE CRICKET PROBABILITY MATRIX
