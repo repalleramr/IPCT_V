@@ -32,22 +32,21 @@ module.exports = async function (req, res) {
       return res.status(200).json({ success: false, error: "Temporal mismatch", match_info: lockdownPayload });
   }
 
-  // Spoofing mobile headers to bypass basic Crex blocks
+  // Mobile spoofing headers for stealth
   const headers = { 
       'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-G991U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.9'
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
   };
 
   let payload = {
-        title: "CREX: Target Unknown", status: "Scanning Fields...", match_state: "standby",
-        live_score: "CREX: No Score", current_rr: "CREX: No CRR", required_rr: "CREX: No REQ",
-        striker: "CREX: No Striker", non_striker: "CREX: No Non-Striker", bowler: "CREX: No Bowler",
-        toss: "CREX: No Toss Data", venue: "CREX: Venue Hidden", last_over: ["C", "R", "E", "X", "!", "!"],
-        prediction: "CREX: AI Offline", match_prediction: "", source_url: "Hunting..."
+        title: "TARGET UNKNOWN", status: "Scanning Fields...", match_state: "standby",
+        live_score: "NO SCORE", current_rr: "NO CRR", required_rr: "NO REQ",
+        striker: "NO STRIKER", non_striker: "NO NON-STRIKER", bowler: "NO BOWLER",
+        toss: "NO TOSS DATA", venue: "VENUE HIDDEN", last_over: ["-", "-", "-", "-", "-", "-"],
+        prediction: "AI OFFLINE", match_prediction: "", source_url: "Hunting..."
   };
 
-  let pageTitle = ""; let bodyText = ""; let $ = null; 
+  let pageTitle = ""; let bodyText = ""; let espnMatchData = null; let $ = null; 
 
   const teamAliases = {
       "chennai": ["csk", "chennai", "super kings"], "lucknow": ["lsg", "lucknow", "super giants"],
@@ -71,56 +70,103 @@ module.exports = async function (req, res) {
       let timestampBuster = Date.now(); 
 
       // ==========================================
-      // [TARGET: CREX ONLY]
+      // WATERFALL TARGET 1: CREX (.com / .live)
       // ==========================================
-      try {
-          let crexUrl = targetUrl.includes('crex') ? targetUrl : "";
-          if (!crexUrl && targetTeams) {
-              const cxRes = await axios.get(`https://crex.live/fixtures/match-list?_t=${timestampBuster}`, { headers, timeout: 3500 });
-              const $temp = cheerio.load(cxRes.data);
-              $temp('a').each((i, el) => {
-                  let txt = $temp(el).text().toLowerCase(); 
-                  let href = $temp(el).attr('href') || ""; 
-                  let strictTeamCheck = txt + " " + href;
-                  if ((txt.includes('ipl') || txt.includes('indian premier league')) && href.includes('scoreboard') && matchesTeams(strictTeamCheck)) {
-                      crexUrl = 'https://crex.live' + href;
+      if (!htmlAcquired) {
+          try {
+              let crexUrl = (targetUrl.includes('crex.com') || targetUrl.includes('crex.live')) ? targetUrl : "";
+              
+              if (!crexUrl && targetTeams) {
+                  // Fallback search if direct URL is not provided
+                  const cxRes = await axios.get(`https://crex.com/fixtures/match-list?_t=${timestampBuster}`, { headers, timeout: 2500 });
+                  const $temp = cheerio.load(cxRes.data);
+                  $temp('a').each((i, el) => {
+                      let txt = $temp(el).text().toLowerCase(); let href = $temp(el).attr('href') || ""; let strictTeamCheck = txt + " " + href;
+                      if ((txt.includes('ipl') || txt.includes('indian premier league')) && (href.includes('score') || href.includes('match-updates')) && matchesTeams(strictTeamCheck)) {
+                          crexUrl = href.startsWith('http') ? href : 'https://crex.com' + href;
+                      }
+                  });
+              }
+              if (crexUrl) {
+                  let fetchUrl = crexUrl.includes('?') ? `${crexUrl}&_t=${timestampBuster}` : `${crexUrl}?_t=${timestampBuster}`;
+                  const cRes = await axios.get(fetchUrl, { headers, timeout: 3000 });
+                  $ = cheerio.load(cRes.data); $('script, style, noscript').remove();
+                  pageTitle = $('title').text() || ""; bodyText = $('body').text().replace(/\s+/g, ' ');
+                  payload.source_url = "CREX (Tier 1 Speed)"; htmlAcquired = true;
+              }
+          } catch (e) { console.log("Crex Blocked. Failing over to Target 2."); }
+      }
+
+      // ==========================================
+      // WATERFALL TARGET 2: HIDDEN CRICBUZZ API
+      // ==========================================
+      if (!htmlAcquired) {
+          try {
+              let cbUrl = targetUrl.includes('cricbuzz') ? targetUrl.replace('www.cricbuzz.com', 'm.cricbuzz.com') : ""; 
+              if (!cbUrl && targetTeams) {
+                  const searchDirs = [ `https://m.cricbuzz.com/cricket-match/live-scores?_t=${timestampBuster}`, `https://m.cricbuzz.com/cricket-match/live-scores/upcoming?_t=${timestampBuster}` ];
+                  for (let dir of searchDirs) {
+                      const res = await axios.get(dir, { headers, timeout: 2500 });
+                      const $temp = cheerio.load(res.data);
+                      $temp('a').each((i, el) => {
+                          let txt = $temp(el).text().toLowerCase(); let href = $temp(el).attr('href') || ""; let parentTxt = $temp(el).parent().parent().text().toLowerCase();
+                          if ((href.includes('indian-premier-league') || parentTxt.includes('ipl')) && href.match(/\/\d{4,}\//) && matchesTeams(txt + " " + href) && href.includes('scores')) cbUrl = 'https://m.cricbuzz.com' + href;
+                      });
+                      if (cbUrl) break;
                   }
+              }
+              if (cbUrl) {
+                  cbUrl = cbUrl.replace('www.', 'm.').replace('/live-cricket-scorecard/', '/cricket-scores/');
+                  let fetchUrl = cbUrl.includes('?') ? `${cbUrl}&_t=${timestampBuster}` : `${cbUrl}?_t=${timestampBuster}`;
+                  const cbRes = await axios.get(fetchUrl, { headers, timeout: 3500 });
+                  $ = cheerio.load(cbRes.data); $('script, style, noscript').remove();
+                  pageTitle = $('title').text() || ""; bodyText = $('body').text().replace(/\s+/g, ' ');
+                  payload.source_url = "CRICBUZZ (Tier 2 Failsafe)"; htmlAcquired = true;
+              }
+          } catch (e) { console.log("Cricbuzz Blocked. Failing over to Target 3."); }
+      }
+
+      // ==========================================
+      // WATERFALL TARGET 3: ESPN MASTER SERVER
+      // ==========================================
+      if (!htmlAcquired) {
+          try {
+              const espnRes = await axios.get(`https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current?_t=${timestampBuster}`, { headers, timeout: 3000 });
+              espnMatchData = espnRes.data.matches.find(m => {
+                  let isIPL = (m.series?.name?.toLowerCase().includes('ipl') || m.title.toLowerCase().includes('ipl'));
+                  return isIPL && matchesTeams(m.title.toLowerCase() + " " + m.teams.map(t => t.team.abbreviation).join(" ").toLowerCase());
               });
-          }
-          if (crexUrl) {
-              let fetchUrl = crexUrl.includes('?') ? `${crexUrl}&_t=${timestampBuster}` : `${crexUrl}?_t=${timestampBuster}`;
-              const cRes = await axios.get(fetchUrl, { headers, timeout: 4000 });
-              $ = cheerio.load(cRes.data); 
-              $('script, style, noscript').remove();
-              pageTitle = $('title').text() || ""; 
-              bodyText = $('body').text().replace(/\s+/g, ' ');
-              payload.source_url = crexUrl; 
-              htmlAcquired = true;
-          }
-      } catch (e) {
-          throw new Error("Crex Server Blocked or Match Not Found");
+              if (espnMatchData) {
+                  pageTitle = espnMatchData.title; bodyText = espnMatchData.statusText + " " + (espnMatchData.tossResults?.text || "");
+                  payload.source_url = "ESPN (Tier 3 Failsafe)"; htmlAcquired = true;
+              }
+          } catch (e) {}
       }
 
       if (!htmlAcquired) {
-          payload.status = "CREX: Today's IPL Match Not Found"; payload.title = "UPLINK FAILED";
+          payload.status = "UPLINK FAILED: ALL TARGETS BLOCKED"; payload.title = "UPLINK FAILED";
           return res.status(200).json({ success: true, match_info: payload }); 
       }
 
-      // --- DATA EXTRACTION ---
+      // --- ASSESSMENT ---
       try {
           let vsMatch = pageTitle.match(/([a-zA-Z0-9\s]+?\s+vs\s+[a-zA-Z0-9\s]+)/i);
           if (vsMatch) payload.title = vsMatch[1].replace(/live score/i, '').replace(/live/i, '').trim();
           else if (targetTeams) payload.title = targetTeams.replace(/\b\w/g, l => l.toUpperCase()); 
           else payload.title = pageTitle.split(/[,|]/)[0].trim() || "Live Cricket Match";
 
-          let statusText = $ ? $('.cb-status-msg, .match-status, .info-status').first().text().trim() : "";
+          let venueMatch = bodyText.match(/Venue\s*:\s*([^•|{]+)/i) || (espnMatchData && espnMatchData.ground ? [null, espnMatchData.ground.name] : null);
+          if (venueMatch) payload.venue = venueMatch[1].trim();
+
+          let statusText = $ ? $('.cb-status-msg, .match-status, .info-status, .cb-text-complete').first().text().trim() : "";
           let titleWin = pageTitle.match(/([a-zA-Z\s\-]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
           if (!statusText && titleWin) statusText = titleWin[1].trim();
+          else if (espnMatchData) statusText = espnMatchData.statusText;
           if (statusText) payload.status = statusText;
           
           let statusLower = (statusText || "").toLowerCase();
           if (statusLower.includes('won by') || statusLower.includes('tied') || statusLower.includes('abandoned')) payload.match_state = "completed";
-          else if (bodyText.includes('CRR:') || bodyText.includes('REQ:') || bodyText.match(/\d+\/\d+/)) payload.match_state = "live";
+          else if (bodyText.includes('CRR:') || bodyText.includes('REQ:') || bodyText.match(/\d+\/\d+/) || (espnMatchData && espnMatchData.status === "Live")) payload.match_state = "live";
           else payload.match_state = "future";
       } catch (e) { payload.match_state = "standby"; }
 
@@ -128,22 +174,26 @@ module.exports = async function (req, res) {
           let tossMatch = bodyText.match(/([A-Z][a-zA-Z\s]+won the toss and (?:opted|elected|chose|decided) to (?:bat|bowl|field))/i);
           if (!tossMatch) tossMatch = bodyText.match(/Toss\s*:\s*([^•|{\(]+)/i);
           if (tossMatch) payload.toss = tossMatch[1].trim();
+          else if (espnMatchData && espnMatchData.tossResults) payload.toss = espnMatchData.tossResults.text;
           if (payload.toss.length > 50) payload.toss = "Tracking Toss Data...";
       } catch (e) { payload.toss = "Toss Error"; }
 
+      // --- LIVE DATA EXTRACTION ---
       if (payload.match_state === "live") {
           try {
               if (payload.status === "Scanning Fields..." || payload.status === "") {
                   if (bodyText.match(/innings break/i)) payload.status = "Innings Break";
                   else if (bodyText.match(/strategic timeout/i)) payload.status = "Strategic Timeout";
+                  else if (bodyText.match(/rain stop/i) || bodyText.match(/delay/i)) payload.status = "Weather/Delay Protocol";
                   else payload.status = "Live Match Active";
               }
-          } catch(e) {}
+          } catch(e) { payload.status = "Status Error"; }
 
           try {
               let scoreMatch = pageTitle.match(/([A-Z]{2,4}\s\d+\/\d+\s\([^)]+\))/);
               if (!scoreMatch) scoreMatch = bodyText.match(/([A-Z]{2,4}\s\d+\/\d+\s\([^)]+\))/);
               if (scoreMatch) payload.live_score = scoreMatch[1];
+              else if (espnMatchData) payload.live_score = `${espnMatchData.teams[0].score || ''} vs ${espnMatchData.teams[1].score || ''}`;
           } catch(e) { payload.live_score = "Score Error"; }
 
           try {
@@ -152,27 +202,74 @@ module.exports = async function (req, res) {
               
               let reqMatch = bodyText.match(/(?:REQ|RRR|Req RR)\s*[:-]?\s*([\d\.]+)/i);
               if (reqMatch) payload.required_rr = reqMatch[1];
-              else payload.required_rr = "1st Innings";
+              else {
+                  if (espnMatchData && espnMatchData.liveInning && espnMatchData.liveInning.requiredRunRate) payload.required_rr = espnMatchData.liveInning.requiredRunRate.toString();
+                  else payload.required_rr = "1st Innings";
+              }
           } catch(e) { payload.current_rr = "Error"; payload.required_rr = "Error"; }
 
-          // STRIKER / BOWLER
           try {
               let foundStriker = "";
               let starMatch = bodyText.match(/([a-zA-Z\s\-\'\.]+?)\s*\*\s*\d+\s+\d+/);
               if (starMatch && starMatch[1]) {
                   let cleanName = starMatch[1].replace(/(Batter|SR|ECO|Runs|4s|6s)/gi, '').trim().replace(/^[a-z]+\s*/, '').trim(); 
-                  if (cleanName.length > 2) foundStriker = cleanName + " *";
+                  if (cleanName.length > 2 && !cleanName.toLowerCase().includes('match')) foundStriker = cleanName;
               }
+              if (!foundStriker && $) {
+                  $('a[href*="/profiles/"]').each((i, el) => {
+                      let name = $(el).text().trim(); let rowTxt = $(el).parent().parent().text();
+                      if (rowTxt.includes('*') && rowTxt.includes(name) && !foundStriker && name.length > 2) foundStriker = name;
+                  });
+              }
+              if (foundStriker) foundStriker = foundStriker.replace(/\*/g, '').trim() + " *";
               payload.striker = foundStriker || "Target Engaged";
           } catch(e) { payload.striker = "Extractor Error"; }
 
           try {
-              let foundBowler = ""; 
-              let ecoMatch = bodyText.match(/ECO\s+([a-zA-Z\s\-\'\.]+?)\s*\d/i);
-              if (ecoMatch && ecoMatch[1]) {
-                  let cleanName = ecoMatch[1].replace(/(Bowler|Batter|SR|ECO|\*)/gi, '').trim();
-                  if (cleanName.length > 2) foundBowler = cleanName;
+              let foundNonStriker = ""; let strikerNameRaw = payload.striker.replace(/\*/g, '').trim(); 
+              if ($) {
+                  let allNames = [];
+                  $('a[href*="/profiles/"]').each((i, el) => {
+                      let name = $(el).text().replace(/\*/g, '').trim();
+                      if (name.length > 2 && !allNames.includes(name)) allNames.push(name);
+                  });
+                  if (allNames.length >= 2) {
+                      if (strikerNameRaw.includes(allNames[0]) || allNames[0].includes(strikerNameRaw)) foundNonStriker = allNames[1];
+                      else foundNonStriker = allNames[0]; 
+                  }
               }
+              if (!foundNonStriker) {
+                  let matchBlock = bodyText.match(/SR\s+(.+?)\s+Bowler/i);
+                  if (matchBlock) {
+                      let nameMatches = [...matchBlock[1].matchAll(/([a-zA-Z\s\-\'\.]+?)\s*(?:\*|\d{1,3}\s+\d{1,3})/g)];
+                      for (let m of nameMatches) {
+                          let possibleName = m[1].replace(/\*/g, '').trim();
+                          if (possibleName.length > 2 && !strikerNameRaw.includes(possibleName) && !possibleName.includes(strikerNameRaw)) { foundNonStriker = possibleName; break; }
+                      }
+                  }
+              }
+              payload.non_striker = foundNonStriker || "Off-Strike";
+          } catch(e) { payload.non_striker = "Extractor Error"; }
+
+          try {
+              let foundBowler = ""; let strikerRaw = payload.striker.replace(/\*/g, '').trim(); let nonStrikerRaw = payload.non_striker.trim();
+              if ($) {
+                  let allProfileNames = [];
+                  $('a[href*="/profiles/"]').each((i, el) => {
+                      let name = $(el).text().replace(/\*/g, '').trim();
+                      if (name.length > 2 && !allProfileNames.includes(name)) allProfileNames.push(name);
+                  });
+                  let nonBatters = allProfileNames.filter(name => !strikerRaw.includes(name) && !name.includes(strikerRaw) && !nonStrikerRaw.includes(name) && !name.includes(nonStrikerRaw) );
+                  if (nonBatters.length > 0) foundBowler = nonBatters[0];
+              }
+              if (!foundBowler) {
+                  let ecoMatch = bodyText.match(/ECO\s+([a-zA-Z\s\-\'\.]+?)\s*\d/i);
+                  if (ecoMatch && ecoMatch[1]) {
+                      let cleanName = ecoMatch[1].replace(/(Bowler|Batter|SR|ECO|\*)/gi, '').trim();
+                      if (cleanName.length > 2) foundBowler = cleanName;
+                  }
+              }
+              if (foundBowler) foundBowler = foundBowler.replace(/\*/g, '').trim();
               payload.bowler = foundBowler || "Active Bowler";
           } catch(e) { payload.bowler = "Extractor Error"; }
 
@@ -210,7 +307,7 @@ module.exports = async function (req, res) {
                       let recentRR = validBalls > 0 ? (recentRuns / validBalls) * 6 : crr;
                       let blendedRR = (recentRR * 0.6) + (crr * 0.4);
                       
-                      let isChase = (payload.required_rr !== "CREX: No REQ" && payload.required_rr !== "1st Innings" && payload.required_rr !== "Error");
+                      let isChase = (payload.required_rr && !payload.required_rr.includes("REQ") && payload.required_rr !== "1st Innings" && payload.required_rr !== "Error");
                       let rrrVal = isChase ? parseFloat(payload.required_rr) : 0;
 
                       // --- CORE 1: PHASE MARKETS ---
@@ -302,16 +399,15 @@ module.exports = async function (req, res) {
       }
 
       else if (payload.match_state === "completed" || payload.match_state === "future") {
-          // Handled via fallback strings initialized in payload
           payload.live_score = payload.match_state === "completed" ? "Match Ended" : "Match Not Started";
       }
 
       return res.status(200).json({ success: true, match_info: payload });
 
   } catch (err) {
-      payload.status = "CREX FIREWALL BLOCKED CONNECTION";
+      payload.status = "FIREWALL BLOCKED CONNECTION";
       payload.live_score = "ERROR: Cannot Fetch"; 
-      payload.prediction = "CREX SCRAPER OFFLINE"; 
+      payload.prediction = "SCRAPER OFFLINE"; 
       payload.match_prediction = "DABBA LINE BLOCKED";
       return res.status(200).json({ success: false, error: err.message, match_info: payload });
   }
