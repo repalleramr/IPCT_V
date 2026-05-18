@@ -149,6 +149,28 @@ module.exports = async function (req, res) {
 
       // --- ASSESSMENT ---
       try {
+          // ==========================================
+          // FIX 1: TITLE EXTRACTION
+          // ==========================================
+          let finalTitle = "";
+          let vsMatch = pageTitle.match(/([a-zA-Z0-9\s]+?\s+(?:vs|v)\s+[a-zA-Z0-9\s]+)/i);
+          if (!vsMatch) vsMatch = bodyText.match(/([a-zA-Z0-9\s]+?\s+(?:vs|v)\s+[a-zA-Z0-9\s]+)/i);
+          
+          if (vsMatch) {
+              finalTitle = vsMatch[1];
+          } else if (targetTeams) {
+              finalTitle = targetTeams;
+          } else if (pageTitle && pageTitle.length > 5) {
+              finalTitle = pageTitle.split(/[,|]/)[0];
+          }
+          
+          if (finalTitle) {
+              payload.title = finalTitle.replace(/live score/i, '').replace(/live/i, '').replace(/cricket/i, '').trim().toUpperCase();
+          } else {
+              payload.title = "LIVE MATCH ACTIVE";
+          }
+          // ==========================================
+
           let venueMatch = bodyText.match(/Venue\s*:\s*([^•|{]+)/i) || (espnMatchData && espnMatchData.ground ? [null, espnMatchData.ground.name] : null);
           if (venueMatch) payload.venue = venueMatch[1].trim();
 
@@ -184,24 +206,16 @@ module.exports = async function (req, res) {
           } catch(e) { payload.status = "Status Error"; }
 
           // ==========================================
-          // FIX 1: BULLETPROOF SCORE & TITLE EXTRACTION
+          // PREVIOUS FIX: BULLETPROOF SCORE EXTRACTION
           // ==========================================
           try {
-              // Hunt for the score with either a Slash or a Dash
               let scoreMatch = pageTitle.match(/([A-Z]{2,4}\s\d+[\/\-]\d+\s\([^)]+\))/);
               if (!scoreMatch) scoreMatch = bodyText.match(/([A-Z]{2,4}\s\d+[\/\-]\d+\s\([^)]+\))/);
               
               if (scoreMatch) {
-                  // Force convert any dash into a slash for the Oracle Matrix
                   payload.live_score = scoreMatch[1].replace('-', '/');
               } else if (espnMatchData) {
                   payload.live_score = `${espnMatchData.teams[0].score || ''} vs ${espnMatchData.teams[1].score || ''}`;
-              }
-              
-              // Clean up the Title so it doesn't show the score
-              let vsMatch = pageTitle.match(/([a-zA-Z0-9\s]+?\s+vs\s+[a-zA-Z0-9\s]+)/i);
-              if (vsMatch) {
-                  payload.title = vsMatch[1].replace(/live score/i, '').replace(/live/i, '').trim();
               }
           } catch(e) { payload.live_score = "Score Error"; }
           // ==========================================
