@@ -17,8 +17,6 @@ module.exports = async function (req, res) {
   let rawDateStr = req.query.time || ""; 
   let targetDate = rawDateStr.split('(')[0].trim().toLowerCase();
   
-  // Temporal Lock Removed per Commander's orders.
-  
   const headers = { 
       'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-G991U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
@@ -198,38 +196,40 @@ module.exports = async function (req, res) {
           } catch(e) { payload.current_rr = "Error"; payload.required_rr = "Error"; }
 
           // ==========================================
-          // FIX 7 & 8: THE UN-MASHER EXTRACTOR
+          // FIX 7 & 8: 2ND INNINGS GHOST-DATA BYPASS
           // ==========================================
           try {
               let foundStriker = "";
               let foundNonStriker = "";
               
-              // 1. UN-MASH THE HTML TEXT: Separates touching words (e.g. VeerA -> Veer A)
+              // UN-MASH THE HTML TEXT: Separates touching letters and numbers
               let safeText = bodyText
-                  .replace(/([a-z])([A-Z])/g, '$1 $2')
-                  .replace(/([a-zA-Z])(\d)/g, '$1 $2');
+                  .replace(/([a-zA-Z])(\d)/g, '$1 $2')
+                  .replace(/([a-z])([A-Z])/g, '$1 $2');
               
-              // 2. Isolate the search area to just the Batter table
-              let batIdx = safeText.search(/Batter|Batsman/i);
+              // GHOST DATA BYPASS: Use lastIndexOf to jump straight to the 2nd Innings widget at the bottom
+              let batIdx = safeText.lastIndexOf("Batter");
+              if (batIdx === -1) batIdx = safeText.search(/Batsman/i);
               let searchArea = batIdx !== -1 ? safeText.substring(batIdx, batIdx + 300) : safeText;
 
-              // 3. Match Name + Runs + Balls
+              // Match Name + Runs + Balls
               let batterRegex = /([A-Z][a-zA-Z\s\.\-']{2,25}?)\s+(\d{1,3})\s*\(\s*\d{1,3}\s*\)/g;
               let matches = [...searchArea.matchAll(batterRegex)];
               let validBatters = [];
 
               if (matches.length > 0) {
                   validBatters = matches.filter(m => {
-                      let name = m[1].trim();
-                      if (/[A-Z]{3,}/.test(name)) return false; // Shreds SSRP, REQ, etc.
-                      let lower = name.toLowerCase();
-                      return !lower.includes('total') && !lower.includes('score') && !lower.includes('run') && !lower.includes('over') && name.length > 2;
+                      let lower = m[1].toLowerCase().trim();
+                      // Strict filter to drop all headers, acronyms, and noise
+                      if (/(total|score|extra|run|over|target|batter|batsman|sr|eco|req|crr|fall|match|partnership)/.test(lower)) return false;
+                      if (/^[A-Z\s]+$/.test(m[1].trim()) && m[1].trim().length < 5) return false;
+                      return lower.length > 2;
                   });
               }
 
               let cleanExtractedName = (str) => {
                   let words = str.replace(/\s+/g, ' ').trim().split(' ');
-                  return words.slice(-2).join(' '); // Keeps only the First & Last Name
+                  return words.slice(-2).join(' '); // Keeps only First & Last Name
               };
 
               if (validBatters.length > 0) {
@@ -243,7 +243,7 @@ module.exports = async function (req, res) {
               if (!foundStriker) {
                   let starMatch = safeText.match(/([a-zA-Z\s\-\'\.]+?)\s*\*\s*\d+\s+\d+/);
                   if (starMatch && starMatch[1]) {
-                      let cleanFallback = starMatch[1].replace(/(Batter|SR|ECO|Runs|4s|6s)/gi, '').replace(/[A-Z]{3,}/g, '').trim();
+                      let cleanFallback = starMatch[1].replace(/(Batter|SR|ECO|Runs|4s|6s)/gi, '').trim();
                       foundStriker = cleanExtractedName(cleanFallback);
                   }
               }
@@ -260,14 +260,18 @@ module.exports = async function (req, res) {
                   payload.non_striker = "Off-Strike";
               }
 
+              // ZERO-STATE VANGUARD: Override for 0/0 (0.0)
+              if (payload.live_score && payload.live_score.includes('0/0 (0.0)')) {
+                  payload.striker = "Awaiting Batters";
+                  payload.non_striker = "Standby";
+              }
+
           } catch(e) { 
               payload.striker = "Extractor Error"; 
               payload.non_striker = "Extractor Error";
           }
+          // ==========================================
 
-          // ==========================================
-          // FIX 9: BOWLER UN-MASHER
-          // ==========================================
           try {
               let safeText = bodyText.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([a-zA-Z])(\d)/g, '$1 $2');
               let bowIdx = safeText.search(/Bowler/i);
@@ -282,6 +286,11 @@ module.exports = async function (req, res) {
               } else {
                   payload.bowler = "Active Bowler";
               }
+
+              if (payload.live_score && payload.live_score.includes('0/0 (0.0)')) {
+                  payload.bowler = "Awaiting Bowler";
+              }
+
           } catch(e) { payload.bowler = "Extractor Error"; }
 
           // LAST OVER EXTRACTOR
@@ -326,7 +335,9 @@ module.exports = async function (req, res) {
                           }
                       });
                       
-                      let crr = parseFloat(payload.current_rr) || (runs / totalBalls) * 6;
+                      let crr = parseFloat(payload.current_rr);
+                      if (isNaN(crr)) crr = totalBalls > 0 ? (runs / totalBalls) * 6 : 0;
+                      
                       let recentRR = validBalls > 0 ? (recentRuns / validBalls) * 6 : crr;
                       let blendedRR = (recentRR * 0.6) + (crr * 0.4);
                       
@@ -360,7 +371,11 @@ module.exports = async function (req, res) {
                       let ballsRemaining = 120 - totalBalls;
                       
                       if (isChase) {
-                          if (wkts >= 10 || (ballsRemaining <= 0 && rrrVal > 0)) {
+                          if (totalBalls === 0) {
+                              batWinProb = 50;
+                              if (rrrVal > 9.5) batWinProb -= 10;
+                              else if (rrrVal < 8.0) batWinProb += 10;
+                          } else if (wkts >= 10 || (ballsRemaining <= 0 && rrrVal > 0)) {
                               batWinProb = 1;
                           } else if (rrrVal <= 0) {
                               batWinProb = 99;
@@ -393,7 +408,8 @@ module.exports = async function (req, res) {
                       let matchTactic = `[TRUE WIN %] ${batTeam}: ${batWinProb.toFixed(0)}% | Bowling Team: ${bowlWinProb.toFixed(0)}%|`;
 
                       if (isChase) {
-                          if (batWinProb < 15) matchTactic += `[ANALYSIS] Chase is effectively terminal.|[DIRECTIVE] 🔴 EAT ${batTeam} (Lay) to exploit market sentiment.`;
+                          if (totalBalls === 0) matchTactic += `[ANALYSIS] Awaiting First Ball.|[DIRECTIVE] 🟡 HOLD. Wait for powerplay opening.`;
+                          else if (batWinProb < 15) matchTactic += `[ANALYSIS] Chase is effectively terminal.|[DIRECTIVE] 🔴 EAT ${batTeam} (Lay) to exploit market sentiment.`;
                           else if (batWinProb > 80) matchTactic += `[ANALYSIS] ${batTeam} is dominating the chase.|[DIRECTIVE] 🟢 PLAY ${batTeam} (Back), hedge if a wicket falls.`;
                           else if (rrrVal > 9.5 && wkts < 4) matchTactic += `[ANALYSIS] Scoreboard pressure is building. RRR > 9.5.|[DIRECTIVE] 🔴 EAT ${batTeam} (Lay). Wait for panic.`;
                           else matchTactic += `[ANALYSIS] Match is highly balanced.|[DIRECTIVE] 🟡 HOLD. Wait for a clear swing in run rate.`;
