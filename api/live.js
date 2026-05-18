@@ -220,32 +220,29 @@ module.exports = async function (req, res) {
           } catch(e) { payload.current_rr = "Error"; payload.required_rr = "Error"; }
 
           // ==========================================
-          // FIX 7: STRIKER EXTRACTION (V3 - NUMERIC SIGNATURE MATCH)
+          // FIX 7: STRIKER EXTRACTION (V4 - THE ANCHOR METHOD)
           // ==========================================
           try {
               let foundStriker = "";
               
-              // Searches for: Name + Runs(Balls) + 4s + 6s + StrikeRate
-              // Example: S Samson 19 (9) 3 1 211.11
-              let batterRegex = /([a-zA-Z\s\-\'\.]+?)\s+(\d{1,3})\s*\(\d{1,3}\)\s+\d{1,2}\s+\d{1,2}\s+[\d\.]+/gi;
-              let matches = [...bodyText.matchAll(batterRegex)];
+              // Find where the Batter table starts in the raw text
+              let batterIdx = bodyText.search(/Batter|Batsman/i);
               
-              if (matches && matches.length > 0) {
-                  // Grab the first matched name
-                  let rawName = matches[0][1];
-                  // Strip out any UI text that got caught
-                  let cleanedName = rawName.replace(/(Batter|SR|ECO|Runs|4s|6s|R\(B\)|P\'ship)/gi, '').trim();
+              if (batterIdx !== -1) {
+                  // Grab the immediate 150 characters after "Batter" to isolate the first row
+                  let chunk = bodyText.substring(batterIdx, batterIdx + 150);
                   
-                  // Keep only the last 3 words to avoid long strings of garbage text
-                  let words = cleanedName.split(/\s+/);
-                  if (words.length > 3) {
-                      foundStriker = words.slice(-3).join(" ");
-                  } else {
-                      foundStriker = cleanedName;
+                  // Look for the exact shape: [Any Text] [Runs] ([Balls])
+                  let runBallMatch = chunk.match(/([a-zA-Z\s\-\'\.]+?)\s+\d{1,3}\s*\(\s*\d{1,3}\s*\)/);
+                  
+                  if (runBallMatch && runBallMatch[1]) {
+                      let rawName = runBallMatch[1];
+                      // Surgically delete the table headers that get stuck to the name
+                      foundStriker = rawName.replace(/(Batter|Batsman|R\s*\(\s*B\s*\)|4s|6s|SR|S\.R\.?)/gi, '').trim();
                   }
               }
-              
-              // Cricbuzz Fallback
+
+              // Generic Fallback if Anchor fails
               if (!foundStriker) {
                   let starMatch = bodyText.match(/([a-zA-Z\s\-\'\.]+?)\s*\*\s*\d+\s+\d+/);
                   if (starMatch && starMatch[1]) {
@@ -253,7 +250,12 @@ module.exports = async function (req, res) {
                   }
               }
 
+              // Cleanup and Formatting
               if (foundStriker && foundStriker.length > 2) {
+                  // If it grabbed too much text, cut it down to the last two words (e.g., S Samson)
+                  let words = foundStriker.split(/\s+/);
+                  if (words.length > 3) foundStriker = words.slice(-2).join(" ");
+                  
                   foundStriker = foundStriker.replace(/\*/g, '').trim() + " *";
               }
               
