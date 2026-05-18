@@ -17,6 +17,8 @@ module.exports = async function (req, res) {
   let rawDateStr = req.query.time || ""; 
   let targetDate = rawDateStr.split('(')[0].trim().toLowerCase();
   
+  // Temporal Lock Removed per Commander's orders.
+  
   const headers = { 
       'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-G991U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
@@ -196,66 +198,49 @@ module.exports = async function (req, res) {
           } catch(e) { payload.current_rr = "Error"; payload.required_rr = "Error"; }
 
           // ==========================================
-          // FIX 7 & 8: 2ND INNINGS GHOST-DATA BYPASS
+          // FIX 7 & 8: THE GRID PARSER (CREX COLUMN FIX)
           // ==========================================
           try {
               let foundStriker = "";
               let foundNonStriker = "";
               
-              // UN-MASH THE HTML TEXT: Separates touching letters and numbers
-              let safeText = bodyText
-                  .replace(/([a-zA-Z])(\d)/g, '$1 $2')
-                  .replace(/([a-z])([A-Z])/g, '$1 $2');
+              // 1. Look for the exact Crex Headers and grab the mashed text BEFORE the numbers
+              let batterHeaderRegex = /(?:Batter|Batsman)\s+R\(B\)\s+4[Ss]\s+6[Ss]\s+S\.?R\.?\s+([a-zA-Z\s\.\-'\*]+?)\s*\d/i;
+              let match = bodyText.match(batterHeaderRegex);
               
-              // GHOST DATA BYPASS: Use lastIndexOf to jump straight to the 2nd Innings widget at the bottom
-              let batIdx = safeText.lastIndexOf("Batter");
-              if (batIdx === -1) batIdx = safeText.search(/Batsman/i);
-              let searchArea = batIdx !== -1 ? safeText.substring(batIdx, batIdx + 300) : safeText;
+              if (match && match[1]) {
+                  let namesStr = match[1].trim();
+                  
+                  // Strip the Crex "Impact Player" tag if it exists
+                  namesStr = namesStr.replace(/IMP/g, '').trim();
 
-              // Match Name + Runs + Balls
-              let batterRegex = /([A-Z][a-zA-Z\s\.\-']{2,25}?)\s+(\d{1,3})\s*\(\s*\d{1,3}\s*\)/g;
-              let matches = [...searchArea.matchAll(batterRegex)];
-              let validBatters = [];
-
-              if (matches.length > 0) {
-                  validBatters = matches.filter(m => {
-                      let lower = m[1].toLowerCase().trim();
-                      // Strict filter to drop all headers, acronyms, and noise
-                      if (/(total|score|extra|run|over|target|batter|batsman|sr|eco|req|crr|fall|match|partnership)/.test(lower)) return false;
-                      if (/^[A-Z\s]+$/.test(m[1].trim()) && m[1].trim().length < 5) return false;
-                      return lower.length > 2;
-                  });
-              }
-
-              let cleanExtractedName = (str) => {
-                  let words = str.replace(/\s+/g, ' ').trim().split(' ');
-                  return words.slice(-2).join(' '); // Keeps only First & Last Name
-              };
-
-              if (validBatters.length > 0) {
-                  foundStriker = cleanExtractedName(validBatters[0][1]);
-                  if (validBatters.length > 1) {
-                      foundNonStriker = cleanExtractedName(validBatters[1][1]);
+                  // 2. Intelligent Split: Crex uses double spaces OR crams them together.
+                  let names = namesStr.split(/\s{2,}/);
+                  
+                  if (names.length === 1) {
+                      // If there is only one string, split it when a lowercase letter touches an Uppercase letter
+                      // e.g., "A Sharma I Kishan" -> ["A Sharma", "I Kishan"]
+                      names = namesStr.split(/(?<=[a-z\.\*])\s+(?=[A-Z])/);
                   }
-              }
-
-              // Fallback
-              if (!foundStriker) {
-                  let starMatch = safeText.match(/([a-zA-Z\s\-\'\.]+?)\s*\*\s*\d+\s+\d+/);
+                  
+                  if (names.length > 0) foundStriker = names[0].trim();
+                  if (names.length > 1) foundNonStriker = names[1].trim();
+              } else {
+                  // Fallback for Cricbuzz
+                  let starMatch = bodyText.match(/([a-zA-Z\s\-\'\.]+?)\s*\*\s*\d+\s+\d+/);
                   if (starMatch && starMatch[1]) {
-                      let cleanFallback = starMatch[1].replace(/(Batter|SR|ECO|Runs|4s|6s)/gi, '').trim();
-                      foundStriker = cleanExtractedName(cleanFallback);
+                      foundStriker = starMatch[1].replace(/(Batter|SR|ECO|Runs|4s|6s)/gi, '').trim();
                   }
               }
 
               if (foundStriker) {
-                  payload.striker = foundStriker + " *";
+                  payload.striker = foundStriker.replace(/\*/g, '').trim() + " *";
               } else {
                   payload.striker = "Target Engaged";
               }
 
               if (foundNonStriker) {
-                  payload.non_striker = foundNonStriker;
+                  payload.non_striker = foundNonStriker.replace(/\*/g, '').trim();
               } else {
                   payload.non_striker = "Off-Strike";
               }
@@ -272,25 +257,27 @@ module.exports = async function (req, res) {
           }
           // ==========================================
 
+          // ==========================================
+          // FIX 9: GRID PARSER BOWLER
+          // ==========================================
           try {
-              let safeText = bodyText.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([a-zA-Z])(\d)/g, '$1 $2');
-              let bowIdx = safeText.search(/Bowler/i);
-              let bowArea = bowIdx !== -1 ? safeText.substring(bowIdx, bowIdx + 200) : safeText;
-              
-              let bowMatch = bowArea.match(/([A-Z][a-zA-Z\s\.\-']{2,25}?)\s+(\d{1,2}\s*\-\s*\d{1,3}|\d{1,2}\s*\.\s*\d{1,2}\s+\d)/);
+              let bowMatch = bodyText.match(/Bowler\s+W-R\s+Overs\s+Econ\s+([a-zA-Z\s\.\-'\*]+?)\s*\d/i);
               
               if (bowMatch && bowMatch[1]) {
-                  let name = bowMatch[1].replace(/(Econ|ECO|Overs|Runs|Wickets|Bowler)/gi, '').replace(/[A-Z]{3,}/g, '').trim();
-                  let words = name.replace(/\s+/g, ' ').trim().split(' ');
-                  payload.bowler = words.slice(-2).join(' ');
+                  payload.bowler = bowMatch[1].replace(/IMP/g, '').replace(/\*/g, '').trim();
               } else {
-                  payload.bowler = "Active Bowler";
+                  // Fallback for Cricbuzz
+                  let ecoMatch = bodyText.match(/ECO\s+([a-zA-Z\s\-\'\.]+?)\s*\d/i);
+                  if (ecoMatch && ecoMatch[1]) {
+                      payload.bowler = ecoMatch[1].replace(/(Bowler|Batter|SR|ECO|\*)/gi, '').trim();
+                  } else {
+                      payload.bowler = "Active Bowler";
+                  }
               }
 
               if (payload.live_score && payload.live_score.includes('0/0 (0.0)')) {
                   payload.bowler = "Awaiting Bowler";
               }
-
           } catch(e) { payload.bowler = "Extractor Error"; }
 
           // LAST OVER EXTRACTOR
