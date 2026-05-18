@@ -77,7 +77,6 @@ module.exports = async function (req, res) {
               let crexUrl = (targetUrl.includes('crex.com') || targetUrl.includes('crex.live')) ? targetUrl : "";
               
               if (!crexUrl && targetTeams) {
-                  // Fallback search if direct URL is not provided
                   const cxRes = await axios.get(`https://crex.com/fixtures/match-list?_t=${timestampBuster}`, { headers, timeout: 2500 });
                   const $temp = cheerio.load(cxRes.data);
                   $temp('a').each((i, el) => {
@@ -150,11 +149,6 @@ module.exports = async function (req, res) {
 
       // --- ASSESSMENT ---
       try {
-          let vsMatch = pageTitle.match(/([a-zA-Z0-9\s]+?\s+vs\s+[a-zA-Z0-9\s]+)/i);
-          if (vsMatch) payload.title = vsMatch[1].replace(/live score/i, '').replace(/live/i, '').trim();
-          else if (targetTeams) payload.title = targetTeams.replace(/\b\w/g, l => l.toUpperCase()); 
-          else payload.title = pageTitle.split(/[,|]/)[0].trim() || "Live Cricket Match";
-
           let venueMatch = bodyText.match(/Venue\s*:\s*([^•|{]+)/i) || (espnMatchData && espnMatchData.ground ? [null, espnMatchData.ground.name] : null);
           if (venueMatch) payload.venue = venueMatch[1].trim();
 
@@ -166,7 +160,7 @@ module.exports = async function (req, res) {
           
           let statusLower = (statusText || "").toLowerCase();
           if (statusLower.includes('won by') || statusLower.includes('tied') || statusLower.includes('abandoned')) payload.match_state = "completed";
-          else if (bodyText.includes('CRR:') || bodyText.includes('REQ:') || bodyText.match(/\d+\/\d+/) || (espnMatchData && espnMatchData.status === "Live")) payload.match_state = "live";
+          else if (bodyText.includes('CRR:') || bodyText.includes('REQ:') || bodyText.match(/\d+[\/\-]\d+/) || (espnMatchData && espnMatchData.status === "Live")) payload.match_state = "live";
           else payload.match_state = "future";
       } catch (e) { payload.match_state = "standby"; }
 
@@ -189,12 +183,28 @@ module.exports = async function (req, res) {
               }
           } catch(e) { payload.status = "Status Error"; }
 
+          // ==========================================
+          // FIX 1: BULLETPROOF SCORE & TITLE EXTRACTION
+          // ==========================================
           try {
-              let scoreMatch = pageTitle.match(/([A-Z]{2,4}\s\d+\/\d+\s\([^)]+\))/);
-              if (!scoreMatch) scoreMatch = bodyText.match(/([A-Z]{2,4}\s\d+\/\d+\s\([^)]+\))/);
-              if (scoreMatch) payload.live_score = scoreMatch[1];
-              else if (espnMatchData) payload.live_score = `${espnMatchData.teams[0].score || ''} vs ${espnMatchData.teams[1].score || ''}`;
+              // Hunt for the score with either a Slash or a Dash
+              let scoreMatch = pageTitle.match(/([A-Z]{2,4}\s\d+[\/\-]\d+\s\([^)]+\))/);
+              if (!scoreMatch) scoreMatch = bodyText.match(/([A-Z]{2,4}\s\d+[\/\-]\d+\s\([^)]+\))/);
+              
+              if (scoreMatch) {
+                  // Force convert any dash into a slash for the Oracle Matrix
+                  payload.live_score = scoreMatch[1].replace('-', '/');
+              } else if (espnMatchData) {
+                  payload.live_score = `${espnMatchData.teams[0].score || ''} vs ${espnMatchData.teams[1].score || ''}`;
+              }
+              
+              // Clean up the Title so it doesn't show the score
+              let vsMatch = pageTitle.match(/([a-zA-Z0-9\s]+?\s+vs\s+[a-zA-Z0-9\s]+)/i);
+              if (vsMatch) {
+                  payload.title = vsMatch[1].replace(/live score/i, '').replace(/live/i, '').trim();
+              }
           } catch(e) { payload.live_score = "Score Error"; }
+          // ==========================================
 
           try {
               let crrMatch = bodyText.match(/CRR:\s*([\d\.]+)/i);
