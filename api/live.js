@@ -14,23 +14,8 @@ module.exports = async function (req, res) {
 
   let targetUrl = req.query.url || "";
   let targetTeams = (req.query.teams || "").toLowerCase().trim();
-  let rawDateStr = req.query.time || ""; 
-  let targetDate = rawDateStr.split('(')[0].trim().toLowerCase();
   
-  let now = new Date();
-  let options = { timeZone: 'Asia/Kolkata', month: 'short', day: 'numeric' };
-  let todayIST = now.toLocaleString('en-US', options).toLowerCase();
-  
-  if (targetDate && targetDate !== todayIST) {
-      let lockdownPayload = {
-          title: "UPLINK DENIED", status: "Select today match only", match_state: "standby",
-          live_score: "Out of Bounds", current_rr: "N/A", required_rr: "N/A",
-          striker: "N/A", non_striker: "N/A", bowler: "N/A", toss: "N/A", 
-          venue: "Temporal Lock Active", last_over: ["-", "-", "-", "-", "-", "-"],
-          prediction: "Select today match only", match_prediction: "", source_url: "Rejected by Firewall"
-      };
-      return res.status(200).json({ success: false, error: "Temporal mismatch", match_info: lockdownPayload });
-  }
+  // TEMPORAL LOCK REMOVED: System will now allow scanning of all matches up to the 25th and beyond.
 
   const headers = { 
       'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-G991U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
@@ -211,30 +196,32 @@ module.exports = async function (req, res) {
           } catch(e) { payload.current_rr = "Error"; payload.required_rr = "Error"; }
 
           // ==========================================
-          // FIX 7 ONLY: STRIKER STRICT MATH REGEX
+          // FIX 7: STRIKER EXTRACTION (ZONED MATH)
           // ==========================================
           try {
               let foundStriker = "";
               
-              // Mathematically matches: CapitalizedName Space Numbers (Numbers)
-              // e.g., "S Samson 19 (9)" or "R Gaikwad 2 (2)"
-              let batterRegex = /\b([A-Z][a-zA-Z\s\-\.']{2,25})\s+(\d{1,3})\s*\(\s*\d{1,3}\s*\)/g;
-              let matches = [...bodyText.matchAll(batterRegex)];
+              // Create an isolated Search Zone between Batter and Bowler/Partnership
+              let searchZoneMatch = bodyText.match(/(?:Batter|Batsman)(.*?)(?:Bowler|P'ship|Partnership)/i);
+              let searchZone = searchZoneMatch ? searchZoneMatch[1] : bodyText;
+              
+              // Mathematically matches: Name Space Numbers (Numbers)
+              let batterRegex = /([a-zA-Z\s\-\.']{3,25}?)\s+(\d{1,3})\s*\(\s*\d{1,3}\s*\)/g;
+              let matches = [...searchZone.matchAll(batterRegex)];
               
               if (matches.length > 0) {
-                  // Ignore fake grabs like "Total", "Score", "Runs"
+                  // Ignore fake grabs
                   let validBatters = matches.filter(m => {
                       let lower = m[1].toLowerCase();
-                      return !lower.includes('total') && !lower.includes('score') && !lower.includes('run') && !lower.includes('over');
+                      return !lower.includes('total') && !lower.includes('score') && !lower.includes('run') && !lower.includes('over') && !lower.includes('extra');
                   });
 
                   if (validBatters.length > 0) {
-                      // Take the FIRST valid match. In Crex, the live widget is at the top of the HTML.
                       foundStriker = validBatters[0][1].trim(); 
                   }
               }
 
-              // Fallback for Cricbuzz
+              // Fallback for Cricbuzz structure
               if (!foundStriker) {
                   let starMatch = bodyText.match(/([a-zA-Z\s\-\'\.]+?)\s*\*\s*\d+\s+\d+/);
                   if (starMatch && starMatch[1]) {
@@ -242,8 +229,8 @@ module.exports = async function (req, res) {
                   }
               }
 
-              if (foundStriker) {
-                  // Clean up spaces and attach the star
+              if (foundStriker && foundStriker.length > 2) {
+                  // Clean up multiple spaces and attach the star
                   foundStriker = foundStriker.replace(/\s+/g, ' ').trim();
                   payload.striker = foundStriker + " *";
               } else {
@@ -254,11 +241,10 @@ module.exports = async function (req, res) {
           }
           // ==========================================
 
-          // TARGET 8 & 9 (Untouched Fallbacks - Will return "Off-Strike" / "Active Bowler")
           payload.non_striker = "Off-Strike";
           payload.bowler = "Active Bowler";
 
-          // LAST OVER EXTRACTOR (Working as seen in your JSON)
+          // LAST OVER EXTRACTOR
           try {
               let recentTextMatch = bodyText.match(/Recent\s*:\s*([W0-9NbLwd|\s]+)/i);
               if (recentTextMatch) {
