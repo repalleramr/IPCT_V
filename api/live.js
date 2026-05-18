@@ -14,8 +14,23 @@ module.exports = async function (req, res) {
 
   let targetUrl = req.query.url || "";
   let targetTeams = (req.query.teams || "").toLowerCase().trim();
+  let rawDateStr = req.query.time || ""; 
+  let targetDate = rawDateStr.split('(')[0].trim().toLowerCase();
   
-  // TEMPORAL LOCK REMOVED: System will now allow scanning of all matches up to the 25th and beyond.
+  let now = new Date();
+  let options = { timeZone: 'Asia/Kolkata', month: 'short', day: 'numeric' };
+  let todayIST = now.toLocaleString('en-US', options).toLowerCase();
+  
+  if (targetDate && targetDate !== todayIST) {
+      let lockdownPayload = {
+          title: "UPLINK DENIED", status: "Select today match only", match_state: "standby",
+          live_score: "Out of Bounds", current_rr: "N/A", required_rr: "N/A",
+          striker: "N/A", non_striker: "N/A", bowler: "N/A", toss: "N/A", 
+          venue: "Temporal Lock Active", last_over: ["-", "-", "-", "-", "-", "-"],
+          prediction: "Select today match only", match_prediction: "", source_url: "Rejected by Firewall"
+      };
+      return res.status(200).json({ success: false, error: "Temporal mismatch", match_info: lockdownPayload });
+  }
 
   const headers = { 
       'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-G991U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
@@ -196,28 +211,38 @@ module.exports = async function (req, res) {
           } catch(e) { payload.current_rr = "Error"; payload.required_rr = "Error"; }
 
           // ==========================================
-          // FIX 7: STRIKER EXTRACTION (ZONED MATH)
+          // FIX 7 FINAL: DECIMAL-IGNORING REGEX
           // ==========================================
           try {
               let foundStriker = "";
+              let foundNonStriker = "";
               
-              // Create an isolated Search Zone between Batter and Bowler/Partnership
-              let searchZoneMatch = bodyText.match(/(?:Batter|Batsman)(.*?)(?:Bowler|P'ship|Partnership)/i);
-              let searchZone = searchZoneMatch ? searchZoneMatch[1] : bodyText;
+              // Mathematically matches: Name + Numbers + (Numbers)
+              // The \d{1,3} inside the parens ensures NO DECIMALS are allowed.
+              // This completely ignores the match score (e.g. 163/5 (18.2)).
+              let batterRegex = /([A-Z][a-zA-Z\s\.\-']{2,20}?)\s*(\d{1,3})\s*\(\s*\d{1,3}\s*\)/g;
               
-              // Mathematically matches: Name Space Numbers (Numbers)
-              let batterRegex = /([a-zA-Z\s\-\.']{3,25}?)\s+(\d{1,3})\s*\(\s*\d{1,3}\s*\)/g;
-              let matches = [...searchZone.matchAll(batterRegex)];
-              
-              if (matches.length > 0) {
-                  // Ignore fake grabs
-                  let validBatters = matches.filter(m => {
-                      let lower = m[1].toLowerCase();
-                      return !lower.includes('total') && !lower.includes('score') && !lower.includes('run') && !lower.includes('over') && !lower.includes('extra');
-                  });
+              let matches = [...bodyText.matchAll(batterRegex)];
+              let validBatters = [];
 
-                  if (validBatters.length > 0) {
-                      foundStriker = validBatters[0][1].trim(); 
+              if (matches.length > 0) {
+                  // Filter out bad words
+                  validBatters = matches.filter(m => {
+                      let name = m[1].toLowerCase().trim();
+                      return !name.includes('total') && 
+                             !name.includes('score') && 
+                             !name.includes('extra') && 
+                             !name.includes('run') && 
+                             !name.includes('over') &&
+                             !name.includes('target') &&
+                             name.length > 2;
+                  });
+              }
+
+              if (validBatters.length > 0) {
+                  foundStriker = validBatters[0][1].trim();
+                  if (validBatters.length > 1) {
+                      foundNonStriker = validBatters[1][1].trim();
                   }
               }
 
@@ -229,20 +254,47 @@ module.exports = async function (req, res) {
                   }
               }
 
-              if (foundStriker && foundStriker.length > 2) {
-                  // Clean up multiple spaces and attach the star
-                  foundStriker = foundStriker.replace(/\s+/g, ' ').trim();
+              // Apply formatting
+              if (foundStriker) {
+                  foundStriker = foundStriker.replace(/\*/g, '').replace(/\s+/g, ' ').trim();
                   payload.striker = foundStriker + " *";
               } else {
                   payload.striker = "Target Engaged";
               }
+
+              if (foundNonStriker) {
+                  payload.non_striker = foundNonStriker.replace(/\*/g, '').replace(/\s+/g, ' ').trim();
+              } else {
+                  payload.non_striker = "Off-Strike";
+              }
+
           } catch(e) { 
               payload.striker = "Extractor Error"; 
+              payload.non_striker = "Extractor Error";
           }
           // ==========================================
 
-          payload.non_striker = "Off-Strike";
-          payload.bowler = "Active Bowler";
+          try {
+              let foundBowler = ""; let strikerRaw = payload.striker.replace(/\*/g, '').trim(); let nonStrikerRaw = payload.non_striker.trim();
+              if ($) {
+                  let allProfileNames = [];
+                  $('a[href*="/profiles/"]').each((i, el) => {
+                      let name = $(el).text().replace(/\*/g, '').trim();
+                      if (name.length > 2 && !allProfileNames.includes(name)) allProfileNames.push(name);
+                  });
+                  let nonBatters = allProfileNames.filter(name => !strikerRaw.includes(name) && !name.includes(strikerRaw) && !nonStrikerRaw.includes(name) && !name.includes(nonStrikerRaw) );
+                  if (nonBatters.length > 0) foundBowler = nonBatters[0];
+              }
+              if (!foundBowler) {
+                  let ecoMatch = bodyText.match(/ECO\s+([a-zA-Z\s\-\'\.]+?)\s*\d/i);
+                  if (ecoMatch && ecoMatch[1]) {
+                      let cleanName = ecoMatch[1].replace(/(Bowler|Batter|SR|ECO|\*)/gi, '').trim();
+                      if (cleanName.length > 2) foundBowler = cleanName;
+                  }
+              }
+              if (foundBowler) foundBowler = foundBowler.replace(/\*/g, '').trim();
+              payload.bowler = foundBowler || "Active Bowler";
+          } catch(e) { payload.bowler = "Extractor Error"; }
 
           // LAST OVER EXTRACTOR
           try {
