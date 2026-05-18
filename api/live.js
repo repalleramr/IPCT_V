@@ -220,25 +220,32 @@ module.exports = async function (req, res) {
           } catch(e) { payload.current_rr = "Error"; payload.required_rr = "Error"; }
 
           // ==========================================
-          // FIX 7: STRIKER EXTRACTION SCRIPT
+          // FIX 7: STRIKER EXTRACTION (V3 - NUMERIC SIGNATURE MATCH)
           // ==========================================
           try {
               let foundStriker = "";
               
-              // 1. Hunt specifically for the Crex Batter Table Header and the very first name after it
-              let crexMatch = bodyText.match(/Batter\s+R\(B\)\s+4s\s+6s\s+SR\s+([a-zA-Z\s\-\']+?)\s+\d+\s*\(\d+\)/i);
+              // Searches for: Name + Runs(Balls) + 4s + 6s + StrikeRate
+              // Example: S Samson 19 (9) 3 1 211.11
+              let batterRegex = /([a-zA-Z\s\-\'\.]+?)\s+(\d{1,3})\s*\(\d{1,3}\)\s+\d{1,2}\s+\d{1,2}\s+[\d\.]+/gi;
+              let matches = [...bodyText.matchAll(batterRegex)];
               
-              if (crexMatch && crexMatch[1]) {
-                  foundStriker = crexMatch[1].trim();
-              } else {
-                  // 2. Generic Fallback: Looks for ANY name immediately followed by Runs(Balls) and Stats
-                  let genericMatch = bodyText.match(/([a-zA-Z\s\-\']+?)\s+\d+\s*\(\d+\)\s+\d+\s+\d+\s+[\d\.]+/);
-                  if (genericMatch && genericMatch[1]) {
-                      foundStriker = genericMatch[1].replace(/(Batter|SR|ECO)/gi, '').trim();
+              if (matches && matches.length > 0) {
+                  // Grab the first matched name
+                  let rawName = matches[0][1];
+                  // Strip out any UI text that got caught
+                  let cleanedName = rawName.replace(/(Batter|SR|ECO|Runs|4s|6s|R\(B\)|P\'ship)/gi, '').trim();
+                  
+                  // Keep only the last 3 words to avoid long strings of garbage text
+                  let words = cleanedName.split(/\s+/);
+                  if (words.length > 3) {
+                      foundStriker = words.slice(-3).join(" ");
+                  } else {
+                      foundStriker = cleanedName;
                   }
               }
               
-              // 3. Original Cricbuzz Fallback
+              // Cricbuzz Fallback
               if (!foundStriker) {
                   let starMatch = bodyText.match(/([a-zA-Z\s\-\'\.]+?)\s*\*\s*\d+\s+\d+/);
                   if (starMatch && starMatch[1]) {
