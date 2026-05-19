@@ -196,13 +196,13 @@ module.exports = async function (req, res) {
           } catch(e) { payload.current_rr = "Error"; payload.required_rr = "Error"; }
 
           // ==========================================
-          // FIX 7 & 8: DYNAMIC STRIKER SHIFT ENGINE
+          // FIX 7 & 8: THE STABLE NAME & SHIFTING BAT (🏏) ENGINE
           // ==========================================
           try {
               let foundStriker = "";
               let foundNonStriker = "";
               
-              // 1. Extract the perfect names from the invisible <title> tag
+              // Extract purely from Title to get the stable base names
               let titleBatterRegex = /\(([a-zA-Z\s\.\-']+?)\s+\d{1,3}\s*\(\s*\d{1,3}\s*\)(?:\s*,\s*([a-zA-Z\s\.\-']+?)\s+\d{1,3}\s*\(\s*\d{1,3}\s*\))?\)/;
               let titleMatch = pageTitle.match(titleBatterRegex);
               
@@ -210,35 +210,32 @@ module.exports = async function (req, res) {
               let name2 = titleMatch && titleMatch[2] ? titleMatch[2].trim() : "";
 
               if (name1) {
-                  // 2. Locate the Live Batter Widget in the bodyText to check the strike order
+                  // Figure out who is on strike by seeing who is listed FIRST in the Live Table HTML
                   let safeText = bodyText.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([a-zA-Z])(\d)/g, '$1 $2');
                   let batIdx = safeText.lastIndexOf("Batter");
                   if (batIdx === -1) batIdx = safeText.search(/Batsman/i);
                   
                   let searchArea = batIdx !== -1 ? safeText.substring(batIdx, batIdx + 300) : safeText;
 
-                  // 3. Find exactly where each name appears in the live widget
-                  // Crex ALWAYS puts the active striker on the top row, so whoever has the lower index is on strike.
                   let pos1 = searchArea.indexOf(name1);
                   let pos2 = name2 ? searchArea.indexOf(name2) : -1;
 
-                  // Also check if Cricbuzz/Crex physically printed an asterisk
-                  let n1Star = new RegExp(name1 + "[^a-zA-Z]*\\*", "i").test(safeText);
-                  let n2Star = new RegExp(name2 + "[^a-zA-Z]*\\*", "i").test(safeText);
-
-                  // Swap logic: If name2 has a star, OR if name2 appears before name1 in the HTML block
-                  if (n2Star || (pos2 !== -1 && pos1 !== -1 && pos2 < pos1 && !n1Star)) {
-                      foundStriker = name2;
-                      foundNonStriker = name1;
-                  } else {
-                      foundStriker = name1;
-                      foundNonStriker = name2;
+                  let activeStriker = name1; 
+                  if (pos2 !== -1 && pos1 !== -1 && pos2 < pos1) {
+                      activeStriker = name2; // name2 appears first, so they are the striker
+                  } else if (pos1 === -1 && pos2 !== -1) {
+                      activeStriker = name2;
                   }
 
-                  payload.striker = foundStriker + " *";
-                  payload.non_striker = foundNonStriker || "Off-Strike";
+                  // Names stay completely stable in Target 7 and 8. The Bat 🏏 shifts.
+                  if (activeStriker === name1) {
+                      payload.striker = name1 + " 🏏";
+                      payload.non_striker = name2 || "Off-Strike";
+                  } else {
+                      payload.striker = name1;
+                      payload.non_striker = (name2 || "Off-Strike") + " 🏏";
+                  }
               } else {
-                  // Absolute Fallback
                   payload.striker = "Target Engaged";
                   payload.non_striker = "Off-Strike";
               }
@@ -263,7 +260,7 @@ module.exports = async function (req, res) {
               let bowMatch = bowArea.match(/([A-Z][a-zA-Z\s\.\-']{2,25}?)\s+(\d{1,2}\s*\-\s*\d{1,3}|\d{1,2}\s*\.\s*\d{1,2}\s+\d)/);
               
               if (bowMatch && bowMatch[1]) {
-                  let name = bowMatch[1].replace(/(Econ|ECO|Overs|Runs|Wickets|Bowler)/gi, '').replace(/[A-Z]{3,}/g, '').trim();
+                  let name = bowMatch[1].replace(/(Econ|ECO|Overs|Runs|Wickets|Bowler|IMP)/gi, '').replace(/[A-Z]{3,}/g, '').trim();
                   let words = name.replace(/\s+/g, ' ').trim().split(' ');
                   payload.bowler = words.slice(-2).join(' ');
               } else {
@@ -295,7 +292,7 @@ module.exports = async function (req, res) {
           } catch(e) { payload.last_over = ["E", "R", "R", "O", "R", "!"]; }
 
           // ==========================================================
-          // [TARGET #13] TRUE CRICKET PROBABILITY & LIVE MARKET INTERCEPTOR
+          // [TARGET #13] THE MARKET SNIPER (TRUE ODDS & BOOKIE ODDS)
           // ==========================================================
           try {
               if (payload.live_score.includes('/')) {
@@ -395,50 +392,45 @@ module.exports = async function (req, res) {
                           maxProb = 50 + ((maxProb - 50) * 0.75); // Softens extreme jumps
                       }
 
-                      // --- CORE 3: LIVE MARKET SCRAPER (The 65 66 Hook) ---
+                      // --- CORE 3: LIVE MARKET SNIPER (The 47 48 Hook) ---
                       let realFav = "";
-                      let realPaise = "";
-                      let isRealMarket = false;
-
-                      // Look for "Number view LSG 65 66" inside Crex body text
-                      let numViewMatch = bodyText.match(/Number view\s+([A-Z]{2,4})\s+(\d{2,3})\s+(\d{2,3})/i);
-                      
-                      // Backup match if words "Number view" get stripped, just look for "LSG 65 66" nearby
-                      if (!numViewMatch) {
-                          numViewMatch = bodyText.match(/([A-Z]{2,4})\s+(\d{2})\s+(\d{2})(?!\s*[-\/])/i);
-                      }
-
-                      let favTeam = batWinProb > 50 ? batTeam : "Bowling Team";
                       let favPaise = Math.max(1, Math.round(((100 - maxProb) / maxProb) * 100));
+                      let favTeam = batWinProb > 50 ? batTeam : "Bowling Team";
+                      let isRealMarket = false;
+                      let displayOdds = `${favPaise}-${favPaise + 2}`;
+
+                      // Hacks Crex by scanning the raw body text for a Team Abbreviation followed precisely by two bookie spread numbers
+                      let teamAbbrs = ["CSK", "LSG", "MI", "PBKS", "DC", "GT", "KKR", "RR", "RCB", "SRH"];
+                      let oddsRegex = new RegExp(`\\b(${teamAbbrs.join('|')})\\s+(\\d{1,3})\\s+(\\d{1,3})\\b(?!\\s*[-/\\(\\)])`, 'i');
+                      let numViewMatch = bodyText.match(oddsRegex);
 
                       if (numViewMatch && numViewMatch[1]) {
-                          realFav = numViewMatch[1].toUpperCase();
                           let p1 = parseInt(numViewMatch[2]);
                           let p2 = parseInt(numViewMatch[3]);
                           
-                          // Ensure we didn't just grab a random score (like 15 16 runs)
-                          if (p1 >= 1 && p1 <= 99 && p2 >= 1 && p2 <= 99 && Math.abs(p1 - p2) <= 3) {
-                              favTeam = realFav;
-                              favPaise = p1; // Overwrite AI math with real market
-                              maxProb = (100 / (100 + favPaise)) * 100; // Reverse engineer the probability
+                          // Geninus Filter: Real Dabba odds ALWAYS have a spread of 1 to 3 points (e.g., 47 48). 
+                          // It physically ignores scores like "189 2" because the spread is massive.
+                          if (Math.abs(p1 - p2) <= 3 && p1 > 0 && p2 > 0) {
+                              favTeam = numViewMatch[1].toUpperCase();
+                              favPaise = p1; // Overwrite AI math with real market odds
+                              displayOdds = `${p1}-${p2}`;
+                              maxProb = (100 / (100 + favPaise)) * 100; // Reverse engineer the probability from the real odds
                               isRealMarket = true;
                           }
                       }
 
                       // GENERATE BOOKIE-STYLE UI
-                      let displayOdds = isRealMarket ? `${favPaise}-${favPaise + 1}` : `${favPaise}-${favPaise + 2}`;
                       let tag = isRealMarket ? "[LIVE MARKET ODDS]" : "[TRUE ODDS]";
-                      
                       let matchTactic = `${tag} ${favTeam} is Favorite at ${displayOdds} Paise\nWin Probability: ${maxProb.toFixed(0)}%|`;
 
                       // BOOK SET / HEDGING DIRECTIVES
-                      if (maxProb > 80 || favPaise < 25) {
+                      if (maxProb > 80 || favPaise <= 25) {
                           matchTactic += `[ANALYSIS] ${favTeam} is dominating. Market is highly skewed.|[DIRECTIVE] 🟢 BOOK SET OPPORTUNITY. Lay ${favTeam} at ${favPaise}p to recover initial stake and create Both-Side Profit (Green Book).`;
                       } else if (isChase) {
                           if (totalBalls === 0) matchTactic += `[ANALYSIS] Awaiting First Ball.|[DIRECTIVE] 🟡 HOLD. Wait for powerplay opening.`;
-                          else if (batWinProb < 15) matchTactic += `[ANALYSIS] Chase is effectively terminal.|[DIRECTIVE] 🔴 EAT ${batTeam} (Lay) heavily if odds spike on a boundary.`;
+                          else if (maxProb < 15 && favTeam !== batTeam) matchTactic += `[ANALYSIS] Chase is effectively terminal.|[DIRECTIVE] 🔴 EAT ${batTeam} (Lay) heavily if odds spike on a boundary.`;
                           else if (rrrVal > 9.5 && wkts < 4) matchTactic += `[ANALYSIS] Scoreboard pressure is building. RRR > 9.5.|[DIRECTIVE] 🔴 EAT ${batTeam} (Lay). Wait for panic.`;
-                          else matchTactic += `[ANALYSIS] Match is highly balanced. Trading territory.|[DIRECTIVE] 🟡 HOLD. Wait for a 15-20 paise swing in run rate before entering.`;
+                          else matchTactic += `[ANALYSIS] Match is highly balanced. Trading territory.|[DIRECTIVE] 🟡 HOLD. Wait for a 15-20 paise swing before entering.`;
                       } else {
                           if (wkts >= 5 || (dotBalls >= 3 && wkts >= 3)) matchTactic += `[ANALYSIS] Batting team collapsing.|[DIRECTIVE] 🔴 EAT ${batTeam} (Lay). Bowling team in control.`;
                           else matchTactic += `[ANALYSIS] Consolidation phase. Market is stable.|[DIRECTIVE] 🟡 HOLD. Watch the final explosion before committing capital.`;
