@@ -295,6 +295,9 @@ module.exports = async function (req, res) {
               }
           } catch(e) { payload.last_over = ["E", "R", "R", "O", "R", "!"]; }
 
+          // ==========================================================
+          // [TARGET #13] TRUE CRICKET PROBABILITY & LIVE MARKET INTERCEPTOR
+          // ==========================================================
           try {
               if (payload.live_score.includes('/')) {
                   let scoreMatch = payload.live_score.match(/(\d+)\/(\d+)\s*\(([\d\.]+)\)/);
@@ -317,39 +320,51 @@ module.exports = async function (req, res) {
                       });
                       
                       let crr = parseFloat(payload.current_rr);
-                      if (isNaN(crr)) crr = totalBalls > 0 ? (runs / totalBalls) * 6 : 0;
+                      if (isNaN(crr) || totalBalls === 0) crr = 8.5; // DEFAULT IPL RUN RATE AT BALL ZERO
                       
                       let recentRR = validBalls > 0 ? (recentRuns / validBalls) * 6 : crr;
-                      let blendedRR = (recentRR * 0.6) + (crr * 0.4);
+                      let blendedRR = totalBalls > 0 ? ((recentRR * 0.6) + (crr * 0.4)) : 8.5;
                       
                       let isChase = (payload.required_rr && !payload.required_rr.includes("REQ") && payload.required_rr !== "1st Innings" && payload.required_rr !== "Error");
                       let rrrVal = isChase ? parseFloat(payload.required_rr) : 0;
 
-                      if (isChase) { payload.prediction = `CHASE ORACLE | PHASE MARKETS CLOSED (1st Innings Only)`; } 
-                      else {
+                      // --- CORE 1: PHASE MARKETS ---
+                      if (isChase) { 
+                          payload.prediction = `CHASE ORACLE | PHASE MARKETS CLOSED (1st Innings Only)`; 
+                      } else {
                           let phaseTactic = ""; let projections = []; let milestones = [6, 10, 15, 20];
-                          for (let m of milestones) {
-                              if (overs < m) {
-                                  let oversLeft = m - (overs + (balls/6));
-                                  let projected = Math.floor(runs + (oversLeft * blendedRR));
-                                  if (wkts >= 8) projected = Math.min(projected, runs + 10);
-                                  projections.push(`[${m}v: ${projected}]`);
+                          
+                          if (totalBalls === 0) {
+                              projections = ["[6v: 48]", "[10v: 85]", "[15v: 135]", "[20v: 180]"];
+                              phaseTactic = "🟡 HOLD - MATCH INITIATING";
+                          } else {
+                              for (let m of milestones) {
+                                  if (overs < m) {
+                                      let oversLeft = m - (overs + (balls/6));
+                                      let projected = Math.floor(runs + (oversLeft * blendedRR));
+                                      if (wkts >= 8) projected = Math.min(projected, runs + 10);
+                                      projections.push(`[${m}v: ${projected}]`);
+                                  }
                               }
+                              if (wkts >= 7 || (wkts >= 4 && blendedRR < 7)) phaseTactic = "🔴 EAT (LAY) - COLLAPSING PATTERN";
+                              else if (recentWicketFell && blendedRR < 8) phaseTactic = "🟡 HOLD - PATTERN UNSTABLE";
+                              else if (blendedRR >= 10 && wkts <= 3) phaseTactic = "🟢 PLAY (BACK) - HIGH AGGRESSION";
+                              else phaseTactic = "🟡 HOLD - STANDARD ACCUMULATION";
                           }
-                          if (wkts >= 7 || (wkts >= 4 && blendedRR < 7)) phaseTactic = "🔴 EAT (LAY) - COLLAPSING PATTERN";
-                          else if (recentWicketFell && blendedRR < 8) phaseTactic = "🟡 HOLD - PATTERN UNSTABLE";
-                          else if (blendedRR >= 10 && wkts <= 3) phaseTactic = "🟢 PLAY (BACK) - HIGH AGGRESSION";
-                          else phaseTactic = "🟡 HOLD - STANDARD ACCUMULATION";
 
                           if (projections.length > 0) payload.prediction = `TARGETS: ${projections.join(' ')} \nTACTIC: ${phaseTactic}`;
                           else payload.prediction = `INNINGS ENDING \nTACTIC: ${phaseTactic}`;
                       }
 
+                      // --- CORE 2: BASE MATHEMATICAL PROBABILITY ---
                       let batWinProb = 50;
                       let ballsRemaining = 120 - totalBalls;
                       
                       if (isChase) {
-                          if (totalBalls === 0) { batWinProb = 50; if (rrrVal > 9.5) batWinProb -= 10; else if (rrrVal < 8.0) batWinProb += 10; } 
+                          if (totalBalls === 0) { 
+                              batWinProb = 50; 
+                              if (rrrVal > 9.5) batWinProb -= 10; else if (rrrVal < 8.0) batWinProb += 10; 
+                          } 
                           else if (wkts >= 10 || (ballsRemaining <= 0 && rrrVal > 0)) { batWinProb = 1; } 
                           else if (rrrVal <= 0) { batWinProb = 99; } 
                           else {
@@ -364,12 +379,17 @@ module.exports = async function (req, res) {
                               batWinProb = Math.max(5, Math.min(95, baseProb)); 
                           }
                       } else {
-                          let parScore = 175; let projected = runs + (ballsRemaining / 6) * blendedRR;
-                          let baseProb = 50 + ((projected - parScore) * 0.8);
-                          baseProb -= (wkts * 3); if (recentWicketFell) baseProb -= 4;
-                          batWinProb = Math.max(5, Math.min(95, baseProb));
+                          if (totalBalls === 0) {
+                              batWinProb = 50; // Zero-State Fix: 50% chance at Ball 0.
+                          } else {
+                              let parScore = 175; let projected = runs + (ballsRemaining / 6) * blendedRR;
+                              let baseProb = 50 + ((projected - parScore) * 0.8);
+                              baseProb -= (wkts * 3); if (recentWicketFell) baseProb -= 4;
+                              batWinProb = Math.max(5, Math.min(95, baseProb));
+                          }
                       }
 
+                      // DAMPENER: Forces AI math to act closer to Bookie balancing
                       let maxProb = Math.max(batWinProb, 100 - batWinProb);
                       if (maxProb > 55 && maxProb < 90) maxProb = 50 + ((maxProb - 50) * 0.75); 
 
@@ -378,7 +398,8 @@ module.exports = async function (req, res) {
                       let isRealMarket = false;
                       let displayOdds = `${favPaise}-${favPaise + 2}`;
 
-                      let teamAbbrs = ["CSK", "LSG", "MI", "PBKS", "DC", "GT", "KKR", "RR", "RCB", "SRH"];
+                      // --- CORE 3: LIVE MARKET SNIPER ---
+                      let teamAbbrs = ["CSK", "LSG", "MI", "PBKS", "DC", "GT", "KKR", "RR", "RCB", "SRH", "KOL", "MUM", "PUN", "DEL", "GUJ", "RAJ", "BLR", "HYD", "LUC", "CHE"];
                       let oddsRegex = new RegExp(`\\b(${teamAbbrs.join('|')})\\s+(\\d{1,3})\\s+(\\d{1,3})\\b(?!\\s*[-/\\(\\)])`, 'i');
                       let numViewMatch = bodyText.match(oddsRegex);
 
@@ -392,18 +413,24 @@ module.exports = async function (req, res) {
                       }
 
                       let tag = isRealMarket ? "[LIVE MARKET ODDS]" : "[TRUE ODDS]";
-                      let matchTactic = `${tag} ${favTeam} is Favorite at ${displayOdds} Paise\nWin Probability: ${maxProb.toFixed(0)}%|`;
+                      let matchTactic = "";
 
-                      if (maxProb > 80 || favPaise <= 25) {
-                          matchTactic += `[ANALYSIS] ${favTeam} is dominating. Market is highly skewed.|[DIRECTIVE] 🟢 BOOK SET OPPORTUNITY. Lay ${favTeam} at ${favPaise}p to recover initial stake and create Both-Side Profit (Green Book).`;
-                      } else if (isChase) {
-                          if (totalBalls === 0) matchTactic += `[ANALYSIS] Awaiting First Ball.|[DIRECTIVE] 🟡 HOLD. Wait for powerplay opening.`;
-                          else if (maxProb < 15 && favTeam !== batTeam) matchTactic += `[ANALYSIS] Chase is effectively terminal.|[DIRECTIVE] 🔴 EAT ${batTeam} (Lay) heavily if odds spike on a boundary.`;
-                          else if (rrrVal > 9.5 && wkts < 4) matchTactic += `[ANALYSIS] Scoreboard pressure is building. RRR > 9.5.|[DIRECTIVE] 🔴 EAT ${batTeam} (Lay). Wait for panic.`;
-                          else matchTactic += `[ANALYSIS] Match is highly balanced. Trading territory.|[DIRECTIVE] 🟡 HOLD. Wait for a 15-20 paise swing before entering.`;
+                      if (totalBalls === 0 && !isRealMarket) {
+                          // THE ZERO-STATE BLACK HOLE FIX
+                          matchTactic = `${tag} Book Open at 95-98 Paise (Even)\nWin Probability: 50%|[ANALYSIS] Match is initiating. Awaiting powerplay market data.|[DIRECTIVE] 🟡 HOLD. Keep capital reserved until trend emerges.`;
                       } else {
-                          if (wkts >= 5 || (dotBalls >= 3 && wkts >= 3)) matchTactic += `[ANALYSIS] Batting team collapsing.|[DIRECTIVE] 🔴 EAT ${batTeam} (Lay). Bowling team in control.`;
-                          else matchTactic += `[ANALYSIS] Consolidation phase. Market is stable.|[DIRECTIVE] 🟡 HOLD. Watch the final explosion before committing capital.`;
+                          matchTactic = `${tag} ${favTeam} is Favorite at ${displayOdds} Paise\nWin Probability: ${maxProb.toFixed(0)}%|`;
+
+                          if (maxProb > 80 || favPaise <= 25) {
+                              matchTactic += `[ANALYSIS] ${favTeam} is dominating. Market is highly skewed.|[DIRECTIVE] 🟢 BOOK SET OPPORTUNITY. Lay ${favTeam} at ${favPaise}p to recover initial stake and create Both-Side Profit (Green Book).`;
+                          } else if (isChase) {
+                              if (maxProb < 15 && favTeam !== batTeam) matchTactic += `[ANALYSIS] Chase is effectively terminal.|[DIRECTIVE] 🔴 EAT ${batTeam} (Lay) heavily if odds spike on a boundary.`;
+                              else if (rrrVal > 9.5 && wkts < 4) matchTactic += `[ANALYSIS] Scoreboard pressure is building. RRR > 9.5.|[DIRECTIVE] 🔴 EAT ${batTeam} (Lay). Wait for panic.`;
+                              else matchTactic += `[ANALYSIS] Match is highly balanced. Trading territory.|[DIRECTIVE] 🟡 HOLD. Wait for a 15-20 paise swing before entering.`;
+                          } else {
+                              if (wkts >= 5 || (dotBalls >= 3 && wkts >= 3)) matchTactic += `[ANALYSIS] Batting team collapsing.|[DIRECTIVE] 🔴 EAT ${batTeam} (Lay). Bowling team in control.`;
+                              else matchTactic += `[ANALYSIS] Consolidation phase. Market is stable.|[DIRECTIVE] 🟡 HOLD. Watch the final explosion before committing capital.`;
+                          }
                       }
                       
                       payload.match_prediction = matchTactic;
