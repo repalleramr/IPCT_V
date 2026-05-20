@@ -2,7 +2,6 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 
 module.exports = async function (req, res) {
-  // --- AGGRESSIVE ANTI-CACHING ARMOR ---
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -73,7 +72,7 @@ module.exports = async function (req, res) {
                   pageTitle = $('title').text() || ""; bodyText = $('body').text().replace(/\s+/g, ' ');
                   payload.source_url = "CREX (Tier 1 Speed)"; htmlAcquired = true;
               }
-          } catch (e) { console.log("Crex Blocked. Failing over to Target 2."); }
+          } catch (e) { console.log("Crex Blocked."); }
       }
 
       if (!htmlAcquired) {
@@ -97,7 +96,7 @@ module.exports = async function (req, res) {
                   const cbRes = await axios.get(fetchUrl, { headers, timeout: 3500 });
                   $ = cheerio.load(cbRes.data); $('script, style, noscript').remove();
                   pageTitle = $('title').text() || ""; bodyText = $('body').text().replace(/\s+/g, ' ');
-                  payload.source_url = "CRICBUZZ (Tier 2 Failsafe)"; htmlAcquired = true;
+                  payload.source_url = "CRICBUZZ (Tier 2)"; htmlAcquired = true;
               }
           } catch (e) {}
       }
@@ -111,7 +110,7 @@ module.exports = async function (req, res) {
               });
               if (espnMatchData) {
                   pageTitle = espnMatchData.title; bodyText = espnMatchData.statusText + " " + (espnMatchData.tossResults?.text || "");
-                  payload.source_url = "ESPN (Tier 3 Failsafe)"; htmlAcquired = true;
+                  payload.source_url = "ESPN (Tier 3)"; htmlAcquired = true;
               }
           } catch (e) {}
       }
@@ -121,6 +120,7 @@ module.exports = async function (req, res) {
           return res.status(200).json({ success: true, match_info: payload }); 
       }
 
+      // --- MATCH STATE ASSESSMENT FIX ---
       try {
           let finalTitle = "";
           let vsMatch = pageTitle.match(/([a-zA-Z0-9\s]+?\s+(?:vs|v)\s+[a-zA-Z0-9\s]+)/i);
@@ -143,19 +143,20 @@ module.exports = async function (req, res) {
           if (statusText) payload.status = statusText;
           
           let statusLower = (statusText || "").toLowerCase();
+          
+          // STRICT LIVE DETECTION: Stops fake pre-match triggers
+          let isLive = false;
+          if (espnMatchData && espnMatchData.status === "Live") isLive = true;
+          else if (statusLower.includes('opt to') || statusLower.includes('elected to')) isLive = true; // Toss happened
+          else if (bodyText.match(/CRR:\s*\d+\.\d+/i)) isLive = true; // Exact Run Rate exists
+          else if (bodyText.match(/(?:Batter|Batsman)\s+R\(B\)/i)) isLive = true; // Live Grid exists
+
           if (statusLower.includes('won by') || statusLower.includes('tied') || statusLower.includes('abandoned')) payload.match_state = "completed";
-          else if (bodyText.includes('CRR:') || bodyText.includes('REQ:') || bodyText.match(/\d+[\/\-]\d+/) || (espnMatchData && espnMatchData.status === "Live")) payload.match_state = "live";
+          else if (isLive) payload.match_state = "live";
           else payload.match_state = "future";
       } catch (e) { payload.match_state = "standby"; }
 
-      try {
-          let tossMatch = bodyText.match(/([A-Z][a-zA-Z\s]+won the toss and (?:opted|elected|chose|decided) to (?:bat|bowl|field))/i);
-          if (!tossMatch) tossMatch = bodyText.match(/Toss\s*:\s*([^•|{\(]+)/i);
-          if (tossMatch) payload.toss = tossMatch[1].trim();
-          else if (espnMatchData && espnMatchData.tossResults) payload.toss = espnMatchData.tossResults.text;
-          if (payload.toss.length > 50) payload.toss = "Tracking Toss Data...";
-      } catch (e) { payload.toss = "Toss Error"; }
-
+      // --- LIVE DATA EXTRACTION ---
       if (payload.match_state === "live") {
           try {
               if (payload.status === "Scanning Fields..." || payload.status === "") {
@@ -189,9 +190,6 @@ module.exports = async function (req, res) {
               }
           } catch(e) { payload.current_rr = "Error"; payload.required_rr = "Error"; }
 
-          // ==========================================
-          // FIX 7 & 8: STABLE SLOTS + SHIFTING STAR 🏏 (LAST NAME ANCHOR)
-          // ==========================================
           try {
               let b1Full = ""; let b2Full = "";
               
@@ -230,20 +228,15 @@ module.exports = async function (req, res) {
                   let name1 = b1Full.match(/([A-Za-z\s\.\-']+)/)[1].trim();
                   let name2 = b2Full ? b2Full.match(/([A-Za-z\s\.\-']+)/)[1].trim() : "";
 
-                  let isN1Striker = true; // Default to first slot
+                  let isN1Striker = true; 
                   let safeText = bodyText.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([a-zA-Z])(\d)/g, '$1 $2');
-                  
-                  // Specifically target the header of the live table
                   let tableHeaderMatch = safeText.match(/(?:Batter|Batsman)\s+R\(B\)\s+4[Ss]\s+6[Ss]\s+S\.?R\.?\s+([A-Za-z\s\.\-']+?)\s+\d/i);
                   
                   if (tableHeaderMatch && tableHeaderMatch[1]) {
                       let topNameInTable = tableHeaderMatch[1].trim().toLowerCase();
-                      
-                      // Extract the LAST word of each name (e.g., "Marsh", "Pant") to avoid "M Marsh" vs "Mitchell Marsh" mismatches
                       let n1LastWord = name1.split(' ').pop().toLowerCase();
                       let n2LastWord = name2 ? name2.split(' ').pop().toLowerCase() : "xyz";
 
-                      // If the top name in the table contains Player 2's last name, Player 2 is on strike!
                       if (topNameInTable.includes(n2LastWord) && !topNameInTable.includes(n1LastWord)) {
                           isN1Striker = false; 
                       }
@@ -270,7 +263,6 @@ module.exports = async function (req, res) {
               payload.striker = "Extractor Error"; 
               payload.non_striker = "Extractor Error";
           }
-          // ==========================================
 
           try {
               let safeText = bodyText.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([a-zA-Z])(\d)/g, '$1 $2');
@@ -401,9 +393,7 @@ module.exports = async function (req, res) {
                       }
 
                       let maxProb = Math.max(batWinProb, 100 - batWinProb);
-                      if (maxProb > 55 && maxProb < 90) {
-                          maxProb = 50 + ((maxProb - 50) * 0.75); 
-                      }
+                      if (maxProb > 55 && maxProb < 90) { maxProb = 50 + ((maxProb - 50) * 0.75); }
 
                       let realFav = "";
                       let favPaise = Math.max(1, Math.round(((100 - maxProb) / maxProb) * 100));
@@ -418,7 +408,6 @@ module.exports = async function (req, res) {
                       if (numViewMatch && numViewMatch[1]) {
                           let p1 = parseInt(numViewMatch[2]);
                           let p2 = parseInt(numViewMatch[3]);
-                          
                           if (Math.abs(p1 - p2) <= 3 && p1 > 0 && p2 > 0) {
                               favTeam = numViewMatch[1].toUpperCase();
                               favPaise = p1; 
@@ -456,8 +445,18 @@ module.exports = async function (req, res) {
           } catch(e) { payload.prediction = "Quantum Core Error"; payload.match_prediction = "Core Error"; }
       }
 
-      else if (payload.match_state === "completed" || payload.match_state === "future") {
-          payload.live_score = payload.match_state === "completed" ? "Match Ended" : "Match Not Started";
+      // --- NEW: EXPLICIT PRE-MATCH FALLBACK ---
+      else if (payload.match_state === "future") {
+          payload.live_score = "PRE-MATCH STANDBY";
+          payload.status = "Awaiting Toss";
+          payload.striker = "Target Engaged";
+          payload.non_striker = "Off-Strike";
+          payload.bowler = "Active Bowler";
+          payload.prediction = "ORACLE: STANDBY FOR MATCH START";
+          payload.match_prediction = "[TRUE ODDS] PRE-MATCH ANALYSIS\nWin Probability: 50%|[ANALYSIS] Awaiting pitch reports and toss.|[DIRECTIVE] 🟡 HOLD.";
+      }
+      else if (payload.match_state === "completed") {
+          payload.live_score = "Match Ended";
       }
 
       return res.status(200).json({ success: true, match_info: payload });
