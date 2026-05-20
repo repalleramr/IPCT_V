@@ -2,6 +2,7 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 
 module.exports = async function (req, res) {
+  // --- AGGRESSIVE ANTI-CACHING ARMOR ---
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -26,7 +27,7 @@ module.exports = async function (req, res) {
         live_score: "NO SCORE", current_rr: "NO CRR", required_rr: "NO REQ",
         striker: "NO STRIKER", non_striker: "NO NON-STRIKER", bowler: "NO BOWLER",
         toss: "NO TOSS DATA", venue: "VENUE HIDDEN", last_over: ["-", "-", "-", "-", "-", "-"],
-        prediction: "AI OFFLINE", match_prediction: "", source_url: "Hunting..."
+        prediction: "AI OFFLINE", match_prediction: "", source_url: "Hunting...", fetch_code: "OH"
   };
 
   let pageTitle = ""; let bodyText = ""; let espnMatchData = null; let $ = null; 
@@ -73,7 +74,7 @@ module.exports = async function (req, res) {
                   pageTitle = $('title').text() || ""; bodyText = $('body').text().replace(/\s+/g, ' ');
                   payload.source_url = "CREX (Tier 1 Speed)"; htmlAcquired = true;
               }
-          } catch (e) { console.log("Crex Blocked. Failing over to Target 2."); }
+          } catch (e) {}
       }
 
       // TARGET 2: CRICBUZZ
@@ -118,12 +119,17 @@ module.exports = async function (req, res) {
           } catch (e) {}
       }
 
+      // ==========================================
+      // UREKHA PROTOCOL
+      // ==========================================
+      payload.fetch_code = htmlAcquired ? "UREKHA" : "OH";
+
       if (!htmlAcquired) {
           payload.status = "UPLINK FAILED: ALL TARGETS BLOCKED"; payload.title = "UPLINK FAILED";
           return res.status(200).json({ success: true, match_info: payload }); 
       }
 
-      // --- ASSESSMENT (Pre-Match Firewall Fix) ---
+      // --- ASSESSMENT ---
       try {
           let finalTitle = "";
           let vsMatch = pageTitle.match(/([a-zA-Z0-9\s]+?\s+(?:vs|v)\s+[a-zA-Z0-9\s]+)/i);
@@ -136,8 +142,22 @@ module.exports = async function (req, res) {
           if (finalTitle) payload.title = finalTitle.replace(/live score/i, '').replace(/live/i, '').replace(/cricket/i, '').trim().toUpperCase();
           else payload.title = "LIVE MATCH ACTIVE";
 
+          // ==========================================
+          // VENUE DATABASE PROTOCOL
+          // ==========================================
           let venueMatch = bodyText.match(/Venue\s*:\s*([^•|{]+)/i) || (espnMatchData && espnMatchData.ground ? [null, espnMatchData.ground.name] : null);
-          if (venueMatch) payload.venue = venueMatch[1].trim();
+          if (venueMatch) {
+              payload.venue = venueMatch[1].trim();
+          } else {
+              // Pre-match fallback: Scan raw HTML for known IPL stadiums
+              let stadiums = ["Eden Gardens", "Wankhede", "Chinnaswamy", "Chidambaram", "Arun Jaitley", "Narendra Modi", "Sawai Mansingh", "Rajiv Gandhi", "Ekana", "HPCA", "ACA-VDCA", "Maharaja Yadavindra", "Barsapara", "Mullanpur"];
+              for (let s of stadiums) {
+                  if (new RegExp(s, "i").test(bodyText)) { 
+                      payload.venue = s; 
+                      break; 
+                  }
+              }
+          }
 
           let statusText = $ ? $('.cb-status-msg, .match-status, .info-status, .cb-text-complete').first().text().trim() : "";
           let titleWin = pageTitle.match(/([a-zA-Z\s\-]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
@@ -146,8 +166,6 @@ module.exports = async function (req, res) {
           if (statusText) payload.status = statusText;
           
           let statusLower = (statusText || "").toLowerCase();
-          
-          // Strict Live Check: Must actually contain a score shape (e.g. 0/0) to be considered live.
           let isLiveScoreFormat = bodyText.match(/[A-Z]{2,4}\s\d+[\/\-]\d+/);
           
           if (statusLower.includes('won by') || statusLower.includes('tied') || statusLower.includes('abandoned')) {
@@ -178,6 +196,7 @@ module.exports = async function (req, res) {
               }
           } catch(e) { payload.status = "Status Error"; }
 
+          // SCORE EXTRACTION
           try {
               let scoreMatch = pageTitle.match(/([A-Z]{2,4}\s\d+[\/\-]\d+\s\([^)]+\))/);
               if (!scoreMatch) scoreMatch = bodyText.match(/([A-Z]{2,4}\s\d+[\/\-]\d+\s\([^)]+\))/);
@@ -260,9 +279,9 @@ module.exports = async function (req, res) {
               }
 
               if (payload.live_score && payload.live_score.includes('0/0 (0.0)')) {
-                  payload.striker = "Awaiting Batters";
-                  payload.non_striker = "Standby";
+                  payload.striker = "Awaiting Batters"; payload.non_striker = "Standby";
               }
+
           } catch(e) { 
               payload.striker = "Extractor Error"; payload.non_striker = "Extractor Error";
           }
@@ -280,6 +299,7 @@ module.exports = async function (req, res) {
               } else { payload.bowler = "Active Bowler"; }
 
               if (payload.live_score && payload.live_score.includes('0/0 (0.0)')) payload.bowler = "Awaiting Bowler";
+
           } catch(e) { payload.bowler = "Extractor Error"; }
 
           try {
@@ -381,7 +401,6 @@ module.exports = async function (req, res) {
                       let maxProb = Math.max(batWinProb, 100 - batWinProb);
                       if (maxProb > 55 && maxProb < 90) maxProb = 50 + ((maxProb - 50) * 0.75); 
 
-                      let realFav = "";
                       let favPaise = Math.max(1, Math.round(((100 - maxProb) / maxProb) * 100));
                       let favTeam = batWinProb > 50 ? batTeam : "Bowling Team";
                       let isRealMarket = false;
@@ -435,6 +454,7 @@ module.exports = async function (req, res) {
       payload.live_score = "ERROR: Cannot Fetch"; 
       payload.prediction = "SCRAPER OFFLINE"; 
       payload.match_prediction = "DABBA LINE BLOCKED";
+      payload.fetch_code = "OH"; // Error fallback code
       return res.status(200).json({ success: false, error: err.message, match_info: payload });
   }
 };
