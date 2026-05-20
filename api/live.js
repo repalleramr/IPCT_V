@@ -40,6 +40,19 @@ module.exports = async function (req, res) {
       "royal": ["rcb", "bengaluru", "bangalore", "challengers"], "sunrisers": ["srh", "hyderabad", "sunrisers"]
   };
 
+  const homeVenues = {
+      "csk": "M.A. Chidambaram Stadium, Chennai",
+      "lsg": "Ekana Cricket Stadium, Lucknow",
+      "mi": "Wankhede Stadium, Mumbai",
+      "pbks": "Mullanpur / Mohali",
+      "dc": "Arun Jaitley Stadium, Delhi",
+      "gt": "Narendra Modi Stadium, Ahmedabad",
+      "kkr": "Eden Gardens, Kolkata",
+      "rr": "Sawai Mansingh Stadium, Jaipur",
+      "rcb": "M. Chinnaswamy Stadium, Bengaluru",
+      "srh": "Rajiv Gandhi Intl Stadium, Hyderabad"
+  };
+
   let t1 = targetTeams.split(' vs ')[0]?.trim().split(' ')[0] || "unknown";
   let t2 = targetTeams.split(' vs ')[1]?.trim().split(' ')[0] || "unknown";
   const t1A = teamAliases[t1] || [t1]; const t2A = teamAliases[t2] || [t2];
@@ -53,7 +66,6 @@ module.exports = async function (req, res) {
       let htmlAcquired = false;
       let timestampBuster = Date.now(); 
 
-      // TARGET 1: CREX
       if (!htmlAcquired) {
           try {
               let crexUrl = (targetUrl.includes('crex.com') || targetUrl.includes('crex.live')) ? targetUrl : "";
@@ -77,7 +89,6 @@ module.exports = async function (req, res) {
           } catch (e) {}
       }
 
-      // TARGET 2: CRICBUZZ
       if (!htmlAcquired) {
           try {
               let cbUrl = targetUrl.includes('cricbuzz') ? targetUrl.replace('www.cricbuzz.com', 'm.cricbuzz.com') : ""; 
@@ -104,7 +115,6 @@ module.exports = async function (req, res) {
           } catch (e) {}
       }
 
-      // TARGET 3: ESPN
       if (!htmlAcquired) {
           try {
               const espnRes = await axios.get(`https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current?_t=${timestampBuster}`, { headers, timeout: 3000 });
@@ -119,9 +129,6 @@ module.exports = async function (req, res) {
           } catch (e) {}
       }
 
-      // ==========================================
-      // UREKHA PROTOCOL
-      // ==========================================
       payload.fetch_code = htmlAcquired ? "UREKHA" : "OH";
 
       if (!htmlAcquired) {
@@ -129,7 +136,6 @@ module.exports = async function (req, res) {
           return res.status(200).json({ success: true, match_info: payload }); 
       }
 
-      // --- ASSESSMENT ---
       try {
           let finalTitle = "";
           let vsMatch = pageTitle.match(/([a-zA-Z0-9\s]+?\s+(?:vs|v)\s+[a-zA-Z0-9\s]+)/i);
@@ -143,19 +149,15 @@ module.exports = async function (req, res) {
           else payload.title = "LIVE MATCH ACTIVE";
 
           // ==========================================
-          // VENUE DATABASE PROTOCOL
+          // FIX 1: IPL VENUE GEOFENCE
           // ==========================================
           let venueMatch = bodyText.match(/Venue\s*:\s*([^•|{]+)/i) || (espnMatchData && espnMatchData.ground ? [null, espnMatchData.ground.name] : null);
           if (venueMatch) {
               payload.venue = venueMatch[1].trim();
           } else {
-              // Pre-match fallback: Scan raw HTML for known IPL stadiums
-              let stadiums = ["Eden Gardens", "Wankhede", "Chinnaswamy", "Chidambaram", "Arun Jaitley", "Narendra Modi", "Sawai Mansingh", "Rajiv Gandhi", "Ekana", "HPCA", "ACA-VDCA", "Maharaja Yadavindra", "Barsapara", "Mullanpur"];
-              for (let s of stadiums) {
-                  if (new RegExp(s, "i").test(bodyText)) { 
-                      payload.venue = s; 
-                      break; 
-                  }
+              let homeCode = t1A[0]; 
+              if (homeVenues[homeCode]) {
+                  payload.venue = homeVenues[homeCode];
               }
           }
 
@@ -177,15 +179,17 @@ module.exports = async function (req, res) {
           }
       } catch (e) { payload.match_state = "standby"; }
 
+      // ==========================================
+      // FIX 2: AGGRESSIVE TOSS HUNTER
+      // ==========================================
       try {
-          let tossMatch = bodyText.match(/([A-Z][a-zA-Z\s]+won the toss and (?:opted|elected|chose|decided) to (?:bat|bowl|field))/i);
+          let tossMatch = bodyText.match(/([A-Za-z\s\.\-]+(?:won the toss|opt(?:ed|s)? to|elect(?:ed|s)? to|chose to)\s(?:bat|bowl|field))/i);
           if (!tossMatch) tossMatch = bodyText.match(/Toss\s*:\s*([^•|{\(]+)/i);
           if (tossMatch) payload.toss = tossMatch[1].trim();
           else if (espnMatchData && espnMatchData.tossResults) payload.toss = espnMatchData.tossResults.text;
           if (payload.toss.length > 50) payload.toss = "Tracking Toss Data...";
       } catch (e) { payload.toss = "Toss Error"; }
 
-      // --- LIVE DATA EXTRACTION ---
       if (payload.match_state === "live") {
           try {
               if (payload.status === "Scanning Fields..." || payload.status === "") {
@@ -196,7 +200,6 @@ module.exports = async function (req, res) {
               }
           } catch(e) { payload.status = "Status Error"; }
 
-          // SCORE EXTRACTION
           try {
               let scoreMatch = pageTitle.match(/([A-Z]{2,4}\s\d+[\/\-]\d+\s\([^)]+\))/);
               if (!scoreMatch) scoreMatch = bodyText.match(/([A-Z]{2,4}\s\d+[\/\-]\d+\s\([^)]+\))/);
@@ -221,8 +224,7 @@ module.exports = async function (req, res) {
               let titleMatch = pageTitle.match(titleBatterRegex);
               
               if (titleMatch && titleMatch[1]) {
-                  b1Full = titleMatch[1].trim(); 
-                  b2Full = titleMatch[2] ? titleMatch[2].trim() : ""; 
+                  b1Full = titleMatch[1].trim(); b2Full = titleMatch[2] ? titleMatch[2].trim() : ""; 
               } else {
                   let safeText = bodyText.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([a-zA-Z])(\d)/g, '$1 $2');
                   let batIdx = safeText.lastIndexOf("Batter");
@@ -242,16 +244,12 @@ module.exports = async function (req, res) {
                       }
                   });
 
-                  if (validBatters.length > 0) {
-                      b1Full = validBatters[0];
-                      if (validBatters.length > 1) b2Full = validBatters[1];
-                  }
+                  if (validBatters.length > 0) { b1Full = validBatters[0]; if (validBatters.length > 1) b2Full = validBatters[1]; }
               }
 
               if (b1Full) {
                   let name1 = b1Full.match(/([A-Za-z\s\.\-']+)/)[1].trim();
                   let name2 = b2Full ? b2Full.match(/([A-Za-z\s\.\-']+)/)[1].trim() : "";
-
                   let isN1Striker = true; 
                   let safeText = bodyText.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([a-zA-Z])(\d)/g, '$1 $2');
                   let tableHeaderMatch = safeText.match(/(?:Batter|Batsman)\s+R\(B\)\s+4[Ss]\s+6[Ss]\s+S\.?R\.?\s+([A-Za-z\s\.\-']+?)\s+\d/i);
@@ -260,31 +258,18 @@ module.exports = async function (req, res) {
                       let topNameInTable = tableHeaderMatch[1].trim().toLowerCase();
                       let n1LastWord = name1.split(' ').pop().toLowerCase();
                       let n2LastWord = name2 ? name2.split(' ').pop().toLowerCase() : "xyz";
-
-                      if (topNameInTable.includes(n2LastWord) && !topNameInTable.includes(n1LastWord)) {
-                          isN1Striker = false; 
-                      }
+                      if (topNameInTable.includes(n2LastWord) && !topNameInTable.includes(n1LastWord)) { isN1Striker = false; }
                   }
 
                   if (isN1Striker) {
-                      payload.striker = b1Full + " 🏏";
-                      payload.non_striker = b2Full || "Off-Strike";
+                      payload.striker = b1Full + " 🏏"; payload.non_striker = b2Full || "Off-Strike";
                   } else {
-                      payload.striker = b1Full; 
-                      payload.non_striker = b2Full + " 🏏"; 
+                      payload.striker = b1Full; payload.non_striker = b2Full + " 🏏"; 
                   }
-              } else {
-                  payload.striker = "Target Engaged";
-                  payload.non_striker = "Off-Strike";
-              }
+              } else { payload.striker = "Target Engaged"; payload.non_striker = "Off-Strike"; }
 
-              if (payload.live_score && payload.live_score.includes('0/0 (0.0)')) {
-                  payload.striker = "Awaiting Batters"; payload.non_striker = "Standby";
-              }
-
-          } catch(e) { 
-              payload.striker = "Extractor Error"; payload.non_striker = "Extractor Error";
-          }
+              if (payload.live_score && payload.live_score.includes('0/0 (0.0)')) { payload.striker = "Awaiting Batters"; payload.non_striker = "Standby"; }
+          } catch(e) { payload.striker = "Extractor Error"; payload.non_striker = "Extractor Error"; }
 
           try {
               let safeText = bodyText.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([a-zA-Z])(\d)/g, '$1 $2');
@@ -299,7 +284,6 @@ module.exports = async function (req, res) {
               } else { payload.bowler = "Active Bowler"; }
 
               if (payload.live_score && payload.live_score.includes('0/0 (0.0)')) payload.bowler = "Awaiting Bowler";
-
           } catch(e) { payload.bowler = "Extractor Error"; }
 
           try {
@@ -379,22 +363,16 @@ module.exports = async function (req, res) {
                               if (rrrVal > 10.5) baseProb -= (rrrVal - 10.5) * 8; 
                               else if (rrrVal < 8.5) baseProb += (8.5 - rrrVal) * 5;
                               
-                              let parWickets = (totalBalls / 120) * 10;
-                              let wicketDiff = parWickets - wkts;
+                              let parWickets = (totalBalls / 120) * 10; let wicketDiff = parWickets - wkts;
                               baseProb += (wicketDiff * 3.5); 
-                              
-                              if (rrDiff > 0) baseProb += (rrDiff * 3);
-                              else baseProb += (rrDiff * 5); 
-                              
+                              if (rrDiff > 0) baseProb += (rrDiff * 3); else baseProb += (rrDiff * 5); 
                               if (recentWicketFell) baseProb -= 4; 
                               batWinProb = Math.max(5, Math.min(95, baseProb)); 
                           }
                       } else {
-                          let parScore = 175; 
-                          let projected = runs + (ballsRemaining / 6) * blendedRR;
+                          let parScore = 175; let projected = runs + (ballsRemaining / 6) * blendedRR;
                           let baseProb = 50 + ((projected - parScore) * 0.8);
-                          baseProb -= (wkts * 3); 
-                          if (recentWicketFell) baseProb -= 4;
+                          baseProb -= (wkts * 3); if (recentWicketFell) baseProb -= 4;
                           batWinProb = Math.max(5, Math.min(95, baseProb));
                       }
 
@@ -454,7 +432,7 @@ module.exports = async function (req, res) {
       payload.live_score = "ERROR: Cannot Fetch"; 
       payload.prediction = "SCRAPER OFFLINE"; 
       payload.match_prediction = "DABBA LINE BLOCKED";
-      payload.fetch_code = "OH"; // Error fallback code
+      payload.fetch_code = "OH"; 
       return res.status(200).json({ success: false, error: err.message, match_info: payload });
   }
 };
