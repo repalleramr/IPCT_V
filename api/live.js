@@ -148,9 +148,6 @@ module.exports = async function (req, res) {
           if (finalTitle) payload.title = finalTitle.replace(/live score/i, '').replace(/live/i, '').replace(/cricket/i, '').trim().toUpperCase();
           else payload.title = "LIVE MATCH ACTIVE";
 
-          // ==========================================
-          // FIX 1: IPL VENUE GEOFENCE
-          // ==========================================
           let venueMatch = bodyText.match(/Venue\s*:\s*([^•|{]+)/i) || (espnMatchData && espnMatchData.ground ? [null, espnMatchData.ground.name] : null);
           if (venueMatch) {
               payload.venue = venueMatch[1].trim();
@@ -179,9 +176,6 @@ module.exports = async function (req, res) {
           }
       } catch (e) { payload.match_state = "standby"; }
 
-      // ==========================================
-      // FIX 2: AGGRESSIVE TOSS HUNTER
-      // ==========================================
       try {
           let tossMatch = bodyText.match(/([A-Za-z\s\.\-]+(?:won the toss|opt(?:ed|s)? to|elect(?:ed|s)? to|chose to)\s(?:bat|bowl|field))/i);
           if (!tossMatch) tossMatch = bodyText.match(/Toss\s*:\s*([^•|{\(]+)/i);
