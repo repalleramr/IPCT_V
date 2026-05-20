@@ -52,6 +52,7 @@ module.exports = async function (req, res) {
       let htmlAcquired = false;
       let timestampBuster = Date.now(); 
 
+      // TARGET 1: CREX
       if (!htmlAcquired) {
           try {
               let crexUrl = (targetUrl.includes('crex.com') || targetUrl.includes('crex.live')) ? targetUrl : "";
@@ -72,9 +73,10 @@ module.exports = async function (req, res) {
                   pageTitle = $('title').text() || ""; bodyText = $('body').text().replace(/\s+/g, ' ');
                   payload.source_url = "CREX (Tier 1 Speed)"; htmlAcquired = true;
               }
-          } catch (e) { console.log("Crex Blocked."); }
+          } catch (e) { console.log("Crex Blocked. Failing over to Target 2."); }
       }
 
+      // TARGET 2: CRICBUZZ
       if (!htmlAcquired) {
           try {
               let cbUrl = targetUrl.includes('cricbuzz') ? targetUrl.replace('www.cricbuzz.com', 'm.cricbuzz.com') : ""; 
@@ -96,11 +98,12 @@ module.exports = async function (req, res) {
                   const cbRes = await axios.get(fetchUrl, { headers, timeout: 3500 });
                   $ = cheerio.load(cbRes.data); $('script, style, noscript').remove();
                   pageTitle = $('title').text() || ""; bodyText = $('body').text().replace(/\s+/g, ' ');
-                  payload.source_url = "CRICBUZZ (Tier 2)"; htmlAcquired = true;
+                  payload.source_url = "CRICBUZZ (Tier 2 Failsafe)"; htmlAcquired = true;
               }
           } catch (e) {}
       }
 
+      // TARGET 3: ESPN
       if (!htmlAcquired) {
           try {
               const espnRes = await axios.get(`https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current?_t=${timestampBuster}`, { headers, timeout: 3000 });
@@ -110,7 +113,7 @@ module.exports = async function (req, res) {
               });
               if (espnMatchData) {
                   pageTitle = espnMatchData.title; bodyText = espnMatchData.statusText + " " + (espnMatchData.tossResults?.text || "");
-                  payload.source_url = "ESPN (Tier 3)"; htmlAcquired = true;
+                  payload.source_url = "ESPN (Tier 3 Failsafe)"; htmlAcquired = true;
               }
           } catch (e) {}
       }
@@ -120,7 +123,7 @@ module.exports = async function (req, res) {
           return res.status(200).json({ success: true, match_info: payload }); 
       }
 
-      // --- MATCH STATE ASSESSMENT FIX ---
+      // --- ASSESSMENT (Pre-Match Firewall Fix) ---
       try {
           let finalTitle = "";
           let vsMatch = pageTitle.match(/([a-zA-Z0-9\s]+?\s+(?:vs|v)\s+[a-zA-Z0-9\s]+)/i);
@@ -144,17 +147,25 @@ module.exports = async function (req, res) {
           
           let statusLower = (statusText || "").toLowerCase();
           
-          // STRICT LIVE DETECTION: Stops fake pre-match triggers
-          let isLive = false;
-          if (espnMatchData && espnMatchData.status === "Live") isLive = true;
-          else if (statusLower.includes('opt to') || statusLower.includes('elected to')) isLive = true; // Toss happened
-          else if (bodyText.match(/CRR:\s*\d+\.\d+/i)) isLive = true; // Exact Run Rate exists
-          else if (bodyText.match(/(?:Batter|Batsman)\s+R\(B\)/i)) isLive = true; // Live Grid exists
-
-          if (statusLower.includes('won by') || statusLower.includes('tied') || statusLower.includes('abandoned')) payload.match_state = "completed";
-          else if (isLive) payload.match_state = "live";
-          else payload.match_state = "future";
+          // Strict Live Check: Must actually contain a score shape (e.g. 0/0) to be considered live.
+          let isLiveScoreFormat = bodyText.match(/[A-Z]{2,4}\s\d+[\/\-]\d+/);
+          
+          if (statusLower.includes('won by') || statusLower.includes('tied') || statusLower.includes('abandoned')) {
+              payload.match_state = "completed";
+          } else if (isLiveScoreFormat && (bodyText.includes('CRR:') || bodyText.includes('REQ:') || (espnMatchData && espnMatchData.status === "Live"))) {
+              payload.match_state = "live";
+          } else {
+              payload.match_state = "future";
+          }
       } catch (e) { payload.match_state = "standby"; }
+
+      try {
+          let tossMatch = bodyText.match(/([A-Z][a-zA-Z\s]+won the toss and (?:opted|elected|chose|decided) to (?:bat|bowl|field))/i);
+          if (!tossMatch) tossMatch = bodyText.match(/Toss\s*:\s*([^•|{\(]+)/i);
+          if (tossMatch) payload.toss = tossMatch[1].trim();
+          else if (espnMatchData && espnMatchData.tossResults) payload.toss = espnMatchData.tossResults.text;
+          if (payload.toss.length > 50) payload.toss = "Tracking Toss Data...";
+      } catch (e) { payload.toss = "Toss Error"; }
 
       // --- LIVE DATA EXTRACTION ---
       if (payload.match_state === "live") {
@@ -170,18 +181,13 @@ module.exports = async function (req, res) {
           try {
               let scoreMatch = pageTitle.match(/([A-Z]{2,4}\s\d+[\/\-]\d+\s\([^)]+\))/);
               if (!scoreMatch) scoreMatch = bodyText.match(/([A-Z]{2,4}\s\d+[\/\-]\d+\s\([^)]+\))/);
-              
-              if (scoreMatch) {
-                  payload.live_score = scoreMatch[1].replace('-', '/');
-              } else if (espnMatchData) {
-                  payload.live_score = `${espnMatchData.teams[0].score || ''} vs ${espnMatchData.teams[1].score || ''}`;
-              }
+              if (scoreMatch) payload.live_score = scoreMatch[1].replace('-', '/');
+              else if (espnMatchData) payload.live_score = `${espnMatchData.teams[0].score || ''} vs ${espnMatchData.teams[1].score || ''}`;
           } catch(e) { payload.live_score = "Score Error"; }
 
           try {
               let crrMatch = bodyText.match(/CRR:\s*([\d\.]+)/i);
               if (crrMatch) payload.current_rr = crrMatch[1];
-              
               let reqMatch = bodyText.match(/(?:REQ|RRR|Req RR)\s*[:-]?\s*([\d\.]+)/i);
               if (reqMatch) payload.required_rr = reqMatch[1];
               else {
@@ -192,7 +198,6 @@ module.exports = async function (req, res) {
 
           try {
               let b1Full = ""; let b2Full = "";
-              
               let titleBatterRegex = /\(([A-Za-z\s\.\-']+?\s*\d{1,3}\s*\(\s*\d{1,3}\s*\))(?:\s*,\s*([A-Za-z\s\.\-']+?\s*\d{1,3}\s*\(\s*\d{1,3}\s*\)))?\)/;
               let titleMatch = pageTitle.match(titleBatterRegex);
               
@@ -258,31 +263,23 @@ module.exports = async function (req, res) {
                   payload.striker = "Awaiting Batters";
                   payload.non_striker = "Standby";
               }
-
           } catch(e) { 
-              payload.striker = "Extractor Error"; 
-              payload.non_striker = "Extractor Error";
+              payload.striker = "Extractor Error"; payload.non_striker = "Extractor Error";
           }
 
           try {
               let safeText = bodyText.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([a-zA-Z])(\d)/g, '$1 $2');
               let bowIdx = safeText.search(/Bowler/i);
               let bowArea = bowIdx !== -1 ? safeText.substring(bowIdx, bowIdx + 200) : safeText;
-              
               let bowMatch = bowArea.match(/([A-Z][a-zA-Z\s\.\-']{2,25}?)\s+(\d{1,2}\s*\-\s*\d{1,3}|\d{1,2}\s*\.\s*\d{1,2}\s+\d)/);
               
               if (bowMatch && bowMatch[1]) {
                   let name = bowMatch[1].replace(/(Econ|ECO|Overs|Runs|Wickets|Bowler|IMP)/gi, '').replace(/[A-Z]{3,}/g, '').trim();
                   let words = name.replace(/\s+/g, ' ').trim().split(' ');
                   payload.bowler = words.slice(-2).join(' ');
-              } else {
-                  payload.bowler = "Active Bowler";
-              }
+              } else { payload.bowler = "Active Bowler"; }
 
-              if (payload.live_score && payload.live_score.includes('0/0 (0.0)')) {
-                  payload.bowler = "Awaiting Bowler";
-              }
-
+              if (payload.live_score && payload.live_score.includes('0/0 (0.0)')) payload.bowler = "Awaiting Bowler";
           } catch(e) { payload.bowler = "Extractor Error"; }
 
           try {
@@ -296,9 +293,7 @@ module.exports = async function (req, res) {
                       let arr = lastOverStr.split(/\s+/).filter(b => b.trim() && !b.includes('='));
                       payload.last_over = arr.slice(-6);
                       if (payload.last_over.length === 0) payload.last_over = ["-", "-", "-", "-", "-", "-"];
-                  } else {
-                      payload.last_over = ["-", "-", "-", "-", "-", "-"];
-                  }
+                  } else { payload.last_over = ["-", "-", "-", "-", "-", "-"]; }
               }
           } catch(e) { payload.last_over = ["E", "R", "R", "O", "R", "!"]; }
 
@@ -332,12 +327,9 @@ module.exports = async function (req, res) {
                       let isChase = (payload.required_rr && !payload.required_rr.includes("REQ") && payload.required_rr !== "1st Innings" && payload.required_rr !== "Error");
                       let rrrVal = isChase ? parseFloat(payload.required_rr) : 0;
 
-                      if (isChase) {
-                          payload.prediction = `CHASE ORACLE | PHASE MARKETS CLOSED (1st Innings Only)`;
-                      } else {
-                          let phaseTactic = "";
-                          let projections = [];
-                          let milestones = [6, 10, 15, 20];
+                      if (isChase) { payload.prediction = `CHASE ORACLE | PHASE MARKETS CLOSED (1st Innings Only)`; } 
+                      else {
+                          let phaseTactic = ""; let projections = []; let milestones = [6, 10, 15, 20];
                           for (let m of milestones) {
                               if (overs < m) {
                                   let oversLeft = m - (overs + (balls/6));
@@ -359,17 +351,11 @@ module.exports = async function (req, res) {
                       let ballsRemaining = 120 - totalBalls;
                       
                       if (isChase) {
-                          if (totalBalls === 0) {
-                              batWinProb = 50;
-                              if (rrrVal > 9.5) batWinProb -= 10;
-                              else if (rrrVal < 8.0) batWinProb += 10;
-                          } else if (wkts >= 10 || (ballsRemaining <= 0 && rrrVal > 0)) {
-                              batWinProb = 1;
-                          } else if (rrrVal <= 0) {
-                              batWinProb = 99;
-                          } else {
-                              let baseProb = 50;
-                              let rrDiff = crr - rrrVal;
+                          if (totalBalls === 0) { batWinProb = 50; if (rrrVal > 9.5) batWinProb -= 10; else if (rrrVal < 8.0) batWinProb += 10; } 
+                          else if (wkts >= 10 || (ballsRemaining <= 0 && rrrVal > 0)) { batWinProb = 1; } 
+                          else if (rrrVal <= 0) { batWinProb = 99; } 
+                          else {
+                              let baseProb = 50; let rrDiff = crr - rrrVal;
                               if (rrrVal > 10.5) baseProb -= (rrrVal - 10.5) * 8; 
                               else if (rrrVal < 8.5) baseProb += (8.5 - rrrVal) * 5;
                               
@@ -393,7 +379,7 @@ module.exports = async function (req, res) {
                       }
 
                       let maxProb = Math.max(batWinProb, 100 - batWinProb);
-                      if (maxProb > 55 && maxProb < 90) { maxProb = 50 + ((maxProb - 50) * 0.75); }
+                      if (maxProb > 55 && maxProb < 90) maxProb = 50 + ((maxProb - 50) * 0.75); 
 
                       let realFav = "";
                       let favPaise = Math.max(1, Math.round(((100 - maxProb) / maxProb) * 100));
@@ -406,13 +392,10 @@ module.exports = async function (req, res) {
                       let numViewMatch = bodyText.match(oddsRegex);
 
                       if (numViewMatch && numViewMatch[1]) {
-                          let p1 = parseInt(numViewMatch[2]);
-                          let p2 = parseInt(numViewMatch[3]);
+                          let p1 = parseInt(numViewMatch[2]); let p2 = parseInt(numViewMatch[3]);
                           if (Math.abs(p1 - p2) <= 3 && p1 > 0 && p2 > 0) {
-                              favTeam = numViewMatch[1].toUpperCase();
-                              favPaise = p1; 
-                              displayOdds = `${p1}-${p2}`;
-                              maxProb = (100 / (100 + favPaise)) * 100; 
+                              favTeam = numViewMatch[1].toUpperCase(); favPaise = p1; 
+                              displayOdds = `${p1}-${p2}`; maxProb = (100 / (100 + favPaise)) * 100; 
                               isRealMarket = true;
                           }
                       }
@@ -433,30 +416,16 @@ module.exports = async function (req, res) {
                       }
                       
                       payload.match_prediction = matchTactic;
-
                   } else {
-                      payload.prediction = "ORACLE: AWAITING SUFFICIENT DATA";
-                      payload.match_prediction = "[TRUE ODDS] AWAITING TELEMETRY|[ANALYSIS] Processing Match Data...|[DIRECTIVE] N/A";
+                      payload.prediction = "ORACLE: AWAITING SUFFICIENT DATA"; payload.match_prediction = "[TRUE ODDS] AWAITING TELEMETRY|[ANALYSIS] Processing Match Data...|[DIRECTIVE] N/A";
                   }
               } else {
-                  payload.prediction = "ORACLE: OFFLINE";
-                  payload.match_prediction = "[TRUE ODDS] SYSTEM OFFLINE|[ANALYSIS] Re-establish Uplink.|[DIRECTIVE] N/A";
+                  payload.prediction = "ORACLE: OFFLINE"; payload.match_prediction = "[TRUE ODDS] SYSTEM OFFLINE|[ANALYSIS] Re-establish Uplink.|[DIRECTIVE] N/A";
               }
           } catch(e) { payload.prediction = "Quantum Core Error"; payload.match_prediction = "Core Error"; }
       }
-
-      // --- NEW: EXPLICIT PRE-MATCH FALLBACK ---
-      else if (payload.match_state === "future") {
-          payload.live_score = "PRE-MATCH STANDBY";
-          payload.status = "Awaiting Toss";
-          payload.striker = "Target Engaged";
-          payload.non_striker = "Off-Strike";
-          payload.bowler = "Active Bowler";
-          payload.prediction = "ORACLE: STANDBY FOR MATCH START";
-          payload.match_prediction = "[TRUE ODDS] PRE-MATCH ANALYSIS\nWin Probability: 50%|[ANALYSIS] Awaiting pitch reports and toss.|[DIRECTIVE] 🟡 HOLD.";
-      }
-      else if (payload.match_state === "completed") {
-          payload.live_score = "Match Ended";
+      else if (payload.match_state === "completed" || payload.match_state === "future") {
+          payload.live_score = payload.match_state === "completed" ? "Match Ended" : "Match Not Started";
       }
 
       return res.status(200).json({ success: true, match_info: payload });
