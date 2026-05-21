@@ -75,7 +75,7 @@ module.exports = async function (req, res) {
                   $temp('a').each((i, el) => {
                       let txt = $temp(el).text().toLowerCase(); let href = $temp(el).attr('href') || ""; let strictTeamCheck = txt + " " + href;
                       if ((txt.includes('ipl') || txt.includes('indian premier league')) && (href.includes('score') || href.includes('match-updates')) && matchesTeams(strictTeamCheck)) {
-                          crexUrl = href.startsWith('http') ? href : 'https://crex.com' + href;
+                          crexUrl = href.startsWith('http') ? href : '[https://crex.com](https://crex.com)' + href;
                       }
                   });
               }
@@ -91,7 +91,7 @@ module.exports = async function (req, res) {
 
       if (!htmlAcquired) {
           try {
-              let cbUrl = targetUrl.includes('cricbuzz') ? targetUrl.replace('www.cricbuzz.com', 'm.cricbuzz.com') : ""; 
+              let cbUrl = targetUrl.includes('cricbuzz') ? targetUrl.replace('[www.cricbuzz.com](https://www.cricbuzz.com)', 'm.cricbuzz.com') : ""; 
               if (!cbUrl && targetTeams) {
                   const searchDirs = [ `https://m.cricbuzz.com/cricket-match/live-scores?_t=${timestampBuster}`, `https://m.cricbuzz.com/cricket-match/live-scores/upcoming?_t=${timestampBuster}` ];
                   for (let dir of searchDirs) {
@@ -99,7 +99,7 @@ module.exports = async function (req, res) {
                       const $temp = cheerio.load(res.data);
                       $temp('a').each((i, el) => {
                           let txt = $temp(el).text().toLowerCase(); let href = $temp(el).attr('href') || ""; let parentTxt = $temp(el).parent().parent().text().toLowerCase();
-                          if ((href.includes('indian-premier-league') || parentTxt.includes('ipl')) && href.match(/\/\d{4,}\//) && matchesTeams(txt + " " + href) && href.includes('scores')) cbUrl = 'https://m.cricbuzz.com' + href;
+                          if ((href.includes('indian-premier-league') || parentTxt.includes('ipl')) && href.match(/\/\d{4,}\//) && matchesTeams(txt + " " + href) && href.includes('scores')) cbUrl = '[https://m.cricbuzz.com](https://m.cricbuzz.com)' + href;
                       });
                       if (cbUrl) break;
                   }
@@ -166,9 +166,6 @@ module.exports = async function (req, res) {
           
           let statusLower = (statusText || "").toLowerCase();
           
-          // ==========================================
-          // CORE SCORE FORMAT FIX (Handles missing parenthesis: MI 0-0 0.0)
-          // ==========================================
           let isLiveScoreFormat = bodyText.match(/[A-Z]{2,4}\s\d+[\/\-]\d+/);
           
           if (statusLower.includes('won by') || statusLower.includes('tied') || statusLower.includes('abandoned')) {
@@ -200,7 +197,6 @@ module.exports = async function (req, res) {
           } catch(e) { payload.status = "Status Error"; }
 
           try {
-              // ADVANCED SCORE EXTRACTION: Captures both MI 0/0 (0.0) and MI 0-0 0.0
               let scoreRegex = /([A-Z]{2,4}\s\d+[\/\-]\d+\s*\(?\d+\.\d+\)?)/;
               let scoreMatch = pageTitle.match(scoreRegex);
               if (!scoreMatch) scoreMatch = bodyText.match(scoreRegex);
@@ -337,9 +333,57 @@ module.exports = async function (req, res) {
                       });
                       
                       let crr = parseFloat(payload.current_rr);
-                      if (isNaN(crr) || totalBalls === 0) crr = 8.5; // DEFAULT IPL RUN RATE AT BALL ZERO
+                      if (isNaN(crr) || totalBalls === 0) crr = 8.5; 
                       
                       let recentRR = validBalls > 0 ? (recentRuns / validBalls) * 6 : crr;
                       let blendedRR = totalBalls > 0 ? ((recentRR * 0.6) + (crr * 0.4)) : 8.5;
                       
-                      let isChase = (payload.required_rr && !payload.required_rr.includes("REQ") && payload.required_rr !== "
+                      let isChase = (payload.required_rr && !payload.required_rr.includes("REQ") && payload.required_rr !== "1st Innings" && payload.required_rr !== "Error");
+                      
+                      // --- [MI6 PATCH] TRUE MARKET ODDS EXTRACTION ---
+                      let safeOddsText = bodyText.replace(/\d+\s*Ov(?:ers?)?\s*Runs\s*\d+\s*\d+/gi, ''); 
+                      safeOddsText = safeOddsText.replace(/\d+\s*=\s*\d+/g, ''); 
+                      safeOddsText = safeOddsText.replace(/Open\s*\d+\s*Min\s*\d+\s*Max\s*\d+/gi, '');
+                      
+                      let oddsRegex = /([A-Z]{2,4})\s*(?:[^\d]{0,15})?(\d{2})\s+(\d{2})/;
+                      let oddsMatch = safeOddsText.match(oddsRegex);
+
+                      if (oddsMatch) {
+                          let favTeam = oddsMatch[1];
+                          let livePaise = parseInt(oddsMatch[2]);
+                          let livePaiseMax = parseInt(oddsMatch[3]);
+                          
+                          if (livePaise > 0 && livePaise < 100) {
+                              let winProb = (100 - (livePaise / 2)).toFixed(0); 
+                              payload.match_prediction = `[TRUE ODDS] ${favTeam} is Favorite at ${livePaise}-${livePaiseMax} Paise Win Probability: ${winProb}%|[ANALYSIS] Target acquired and verified.|[DIRECTIVE] 🟢 BOOK SET OPPORTUNITY. EAT (Lay) ${favTeam} at ${livePaise}p to recover initial stake and guarantee a Green Book.`;
+                          } else {
+                              payload.match_prediction = "[TRUE ODDS] Odds Out of Bounds|[ANALYSIS] Market fluctuation.|[DIRECTIVE] 🟡 HOLD.";
+                          }
+                      } else {
+                          payload.match_prediction = "[TRUE ODDS] Market Closed or Scanning...|[ANALYSIS] Awaiting valid odds.|[DIRECTIVE] 🟡 HOLD.";
+                      }
+
+                      // --- PHASE ORACLE PROJECTIONS ---
+                      let baseRun = runs > 0 ? runs : 0;
+                      let p6 = Math.max(baseRun, Math.floor(blendedRR * 6));
+                      let p10 = Math.max(baseRun, Math.floor(blendedRR * 10));
+                      let p15 = Math.max(baseRun, Math.floor(blendedRR * 15));
+                      let p20 = Math.max(baseRun, Math.floor(blendedRR * 20));
+                      
+                      payload.prediction = `TARGETS: [6v: ${p6}] [10v: ${p10}] [15v: ${p15}] [20v: ${p20}]\nTACTIC: 🟡 HOLD - STANDARD ACCUMULATION`;
+                      if (isChase) payload.prediction += `\nCHASE ORACLE ACTIVE`;
+                  }
+              }
+          } catch(e) { 
+              payload.prediction = "AI OFFLINE"; 
+              payload.match_prediction = "MARKET OFFLINE"; 
+          }
+      }
+
+      return res.status(200).json({ success: true, match_info: payload });
+
+  } catch (error) {
+      payload.status = "CRITICAL UPLINK FAILURE";
+      return res.status(500).json({ success: false, match_info: payload, error: error.message });
+  }
+};
