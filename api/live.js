@@ -2,7 +2,6 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 
 module.exports = async function (req, res) {
-  // --- AGGRESSIVE ANTI-CACHING ARMOR ---
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -14,8 +13,6 @@ module.exports = async function (req, res) {
 
   let targetUrl = req.query.url || "";
   let targetTeams = (req.query.teams || "").toLowerCase().trim();
-  let rawDateStr = req.query.time || ""; 
-  let targetDate = rawDateStr.split('(')[0].trim().toLowerCase();
   
   const headers = { 
       'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-G991U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
@@ -41,16 +38,11 @@ module.exports = async function (req, res) {
   };
 
   const homeVenues = {
-      "csk": "M.A. Chidambaram Stadium, Chennai",
-      "lsg": "Ekana Cricket Stadium, Lucknow",
-      "mi": "Wankhede Stadium, Mumbai",
-      "pbks": "Mullanpur / Mohali",
-      "dc": "Arun Jaitley Stadium, Delhi",
-      "gt": "Narendra Modi Stadium, Ahmedabad",
-      "kkr": "Eden Gardens, Kolkata",
-      "rr": "Sawai Mansingh Stadium, Jaipur",
-      "rcb": "M. Chinnaswamy Stadium, Bengaluru",
-      "srh": "Rajiv Gandhi Intl Stadium, Hyderabad"
+      "csk": "M.A. Chidambaram Stadium, Chennai", "lsg": "Ekana Cricket Stadium, Lucknow",
+      "mi": "Wankhede Stadium, Mumbai", "pbks": "Mullanpur / Mohali",
+      "dc": "Arun Jaitley Stadium, Delhi", "gt": "Narendra Modi Stadium, Ahmedabad",
+      "kkr": "Eden Gardens, Kolkata", "rr": "Sawai Mansingh Stadium, Jaipur",
+      "rcb": "M. Chinnaswamy Stadium, Bengaluru", "srh": "Rajiv Gandhi Intl Stadium, Hyderabad"
   };
 
   let t1 = targetTeams.split(' vs ')[0]?.trim().split(' ')[0] || "unknown";
@@ -70,7 +62,6 @@ module.exports = async function (req, res) {
           try {
               let crexUrl = (targetUrl.includes('crex.com') || targetUrl.includes('crex.live')) ? targetUrl : "";
               if (!crexUrl && targetTeams) {
-                  // Using your original timeout of 2500
                   const cxRes = await axios.get(`https://crex.com/fixtures/match-list?_t=${timestampBuster}`, { headers, timeout: 2500 });
                   const $temp = cheerio.load(cxRes.data);
                   $temp('a').each((i, el) => {
@@ -82,7 +73,6 @@ module.exports = async function (req, res) {
               }
               if (crexUrl) {
                   let fetchUrl = crexUrl.includes('?') ? `${crexUrl}&_t=${timestampBuster}` : `${crexUrl}?_t=${timestampBuster}`;
-                  // Using your original timeout of 3000
                   const cRes = await axios.get(fetchUrl, { headers, timeout: 3000 });
                   $ = cheerio.load(cRes.data); $('script, style, noscript').remove();
                   pageTitle = $('title').text() || ""; bodyText = $('body').text().replace(/\s+/g, ' ');
@@ -179,219 +169,37 @@ module.exports = async function (req, res) {
           }
       } catch (e) { payload.match_state = "standby"; }
 
-      // --- [MI6 PATCH] TOSS EXTRACTION ---
+      // --- [TOSS DATA FIX] ---
       try {
-          let tossMatch = bodyText.match(/([A-Za-z\s\.\-]+(?:won the toss|opt(?:ed|s)? to|elect(?:ed|s)? to|chose to)\s(?:bat|bowl|field))/i);
-          if (!tossMatch) {
-              let shortToss = bodyText.match(/Toss\s*[:\-]?\s*([A-Z]{2,4})/i);
-              if (shortToss) tossMatch = [null, shortToss[1].toUpperCase() + " won the toss"];
-          }
-          if (!tossMatch) tossMatch = bodyText.match(/Toss\s*:\s*([^•|{\(]+)/i);
-          if (tossMatch) payload.toss = tossMatch[1].trim();
+          let tossMatch = bodyText.match(/(?:Toss|Toss winner|Toss result)\s*[:\-]?\s*([A-Za-z\s]+)(?:won|opt|elect)/i);
+          if (!tossMatch) tossMatch = bodyText.match(/Toss\s*:\s*([A-Za-z\s]+)/i);
+          if (tossMatch) payload.toss = tossMatch[1].trim() + " won the toss";
           else if (espnMatchData && espnMatchData.tossResults) payload.toss = espnMatchData.tossResults.text;
-          if (payload.toss.length > 50) payload.toss = "Tracking Toss Data...";
       } catch (e) { payload.toss = "Toss Error"; }
 
       if (payload.match_state === "live") {
           try {
-              if (payload.status === "Scanning Fields..." || payload.status === "") {
-                  if (bodyText.match(/innings break/i)) payload.status = "Innings Break";
-                  else if (bodyText.match(/strategic timeout/i)) payload.status = "Strategic Timeout";
-                  else if (bodyText.match(/rain stop/i) || bodyText.match(/delay/i)) payload.status = "Weather/Delay Protocol";
-                  else if (bodyText.match(/Players Entering/i)) payload.status = "Players Entering";
-                  else payload.status = "Live Match Active";
-              }
-          } catch(e) { payload.status = "Status Error"; }
-
-          try {
               let scoreRegex = /([A-Z]{2,4}\s\d+[\/\-]\d+\s*\(?\d+\.\d+\)?)/;
-              let scoreMatch = pageTitle.match(scoreRegex);
-              if (!scoreMatch) scoreMatch = bodyText.match(scoreRegex);
-              
-              if (scoreMatch) {
-                  let rawScore = scoreMatch[1];
-                  let parts = rawScore.match(/([A-Z]{2,4})\s*(\d+)[\/\-](\d+)\s*\(?([\d\.]+)\)?/);
-                  if (parts) {
-                      payload.live_score = `${parts[1]} ${parts[2]}/${parts[3]} (${parts[4]})`;
-                  } else {
-                      payload.live_score = rawScore.replace('-', '/');
-                  }
-              } else if (espnMatchData) {
-                  payload.live_score = `${espnMatchData.teams[0].score || ''} vs ${espnMatchData.teams[1].score || ''}`;
-              }
+              let scoreMatch = pageTitle.match(scoreRegex) || bodyText.match(scoreRegex);
+              if (scoreMatch) payload.live_score = scoreMatch[1].replace('-', '/');
           } catch(e) { payload.live_score = "Score Error"; }
 
+          // --- [TRUE ODDS FIX] ---
           try {
-              let crrMatch = bodyText.match(/CRR:\s*([\d\.]+)/i);
-              if (crrMatch) payload.current_rr = crrMatch[1];
-              let reqMatch = bodyText.match(/(?:REQ|RRR|Req RR)\s*[:-]?\s*([\d\.]+)/i);
-              if (reqMatch) payload.required_rr = reqMatch[1];
-              else {
-                  if (espnMatchData && espnMatchData.liveInning && espnMatchData.liveInning.requiredRunRate) payload.required_rr = espnMatchData.liveInning.requiredRunRate.toString();
-                  else payload.required_rr = "1st Innings";
-              }
-          } catch(e) { payload.current_rr = "Error"; payload.required_rr = "Error"; }
-
-          try {
-              let b1Full = ""; let b2Full = "";
-              let titleBatterRegex = /\(([A-Za-z\s\.\-']+?\s*\d{1,3}\s*\(\s*\d{1,3}\s*\))(?:\s*,\s*([A-Za-z\s\.\-']+?\s*\d{1,3}\s*\(\s*\d{1,3}\s*\)))?\)/;
-              let titleMatch = pageTitle.match(titleBatterRegex);
-              
-              if (titleMatch && titleMatch[1]) {
-                  b1Full = titleMatch[1].trim(); b2Full = titleMatch[2] ? titleMatch[2].trim() : ""; 
+              let teamsStr = [...t1A, ...t2A].join('|');
+              // Look for the team name followed by two numbers (the odds)
+              let oddsRegex = new RegExp(`(${teamsStr})\\s+([0-9]{2})\\s+([0-9]{2})`, "gi");
+              let match = oddsRegex.exec(bodyText);
+              if (match) {
+                  payload.match_prediction = `[TRUE ODDS] ${match[1].toUpperCase()} is Favorite at ${match[2]}-${match[3]} Paise`;
               } else {
-                  let safeText = bodyText.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([a-zA-Z])(\d)/g, '$1 $2');
-                  let batIdx = safeText.lastIndexOf("Batter");
-                  if (batIdx === -1) batIdx = safeText.search(/Batsman/i);
-                  let searchArea = batIdx !== -1 ? safeText.substring(batIdx, batIdx + 300) : safeText;
-
-                  let batterRegex = /([A-Z][a-zA-Z\s\.\-']{2,25}?)\s+(\d{1,3})\s*\(\s*(\d{1,3})\s*\)/g;
-                  let matches = [...searchArea.matchAll(batterRegex)];
-                  let validBatters = [];
-
-                  matches.forEach(m => {
-                      let nameOnly = m[1].replace(/[A-Z]{3,}/g, '').trim();
-                      let words = nameOnly.split(/\s+/);
-                      nameOnly = words.slice(-2).join(' ');
-                      if (nameOnly.length > 2 && !nameOnly.toLowerCase().includes('total')) {
-                          validBatters.push(`${nameOnly} ${m[2]}(${m[3]})`);
-                      }
-                  });
-
-                  if (validBatters.length > 0) { b1Full = validBatters[0]; if (validBatters.length > 1) b2Full = validBatters[1]; }
+                  payload.match_prediction = "[TRUE ODDS] Market Closed or Scanning...";
               }
-
-              if (b1Full) {
-                  let name1 = b1Full.match(/([A-Za-z\s\.\-']+)/)[1].trim();
-                  let name2 = b2Full ? b2Full.match(/([A-Za-z\s\.\-']+)/)[1].trim() : "";
-                  let isN1Striker = true; 
-                  let safeText = bodyText.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([a-zA-Z])(\d)/g, '$1 $2');
-                  let tableHeaderMatch = safeText.match(/(?:Batter|Batsman)\s+R\(B\)\s+4[Ss]\s+6[Ss]\s+S\.?R\.?\s+([A-Za-z\s\.\-']+?)\s+\d/i);
-                  
-                  if (tableHeaderMatch && tableHeaderMatch[1]) {
-                      let topNameInTable = tableHeaderMatch[1].trim().toLowerCase();
-                      let n1LastWord = name1.split(' ').pop().toLowerCase();
-                      let n2LastWord = name2 ? name2.split(' ').pop().toLowerCase() : "xyz";
-                      if (topNameInTable.includes(n2LastWord) && !topNameInTable.includes(n1LastWord)) { isN1Striker = false; }
-                  }
-
-                  if (isN1Striker) {
-                      payload.striker = b1Full + " 🏏"; payload.non_striker = b2Full || "Off-Strike";
-                  } else {
-                      payload.striker = b1Full; payload.non_striker = b2Full + " 🏏"; 
-                  }
-              } else { payload.striker = "Target Engaged"; payload.non_striker = "Off-Strike"; }
-
-              if (payload.live_score && payload.live_score.includes('0/0 (0.0)')) { payload.striker = "Awaiting Batters"; payload.non_striker = "Standby"; }
-          } catch(e) { payload.striker = "Extractor Error"; payload.non_striker = "Extractor Error"; }
-
-          try {
-              let safeText = bodyText.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([a-zA-Z])(\d)/g, '$1 $2');
-              let bowIdx = safeText.search(/Bowler/i);
-              let bowArea = bowIdx !== -1 ? safeText.substring(bowIdx, bowIdx + 200) : safeText;
-              let bowMatch = bowArea.match(/([A-Z][a-zA-Z\s\.\-']{2,25}?)\s+(\d{1,2}\s*\-\s*\d{1,3}|\d{1,2}\s*\.\s*\d{1,2}\s+\d)/);
-              
-              if (bowMatch && bowMatch[1]) {
-                  let name = bowMatch[1].replace(/(Econ|ECO|Overs|Runs|Wickets|Bowler|IMP)/gi, '').replace(/[A-Z]{3,}/g, '').trim();
-                  let words = name.replace(/\s+/g, ' ').trim().split(' ');
-                  payload.bowler = words.slice(-2).join(' ');
-              } else { payload.bowler = "Active Bowler"; }
-
-              if (payload.live_score && payload.live_score.includes('0/0 (0.0)')) payload.bowler = "Awaiting Bowler";
-          } catch(e) { payload.bowler = "Extractor Error"; }
-
-          try {
-              let recentTextMatch = bodyText.match(/Recent\s*:\s*([W0-9NbLwd|\s]+)/i);
-              if (recentTextMatch) {
-                  payload.last_over = recentTextMatch[1].split(/[|\s]+/).filter(b => b.trim()).slice(-6);
-              } else {
-                  let overMatches = [...bodyText.matchAll(/Over\s+\d+\s+([W0-9Nbwd\s]+?)(?:Over|=|$)/gi)];
-                  if (overMatches.length > 0) {
-                      let lastOverStr = overMatches[overMatches.length - 1][1];
-                      let arr = lastOverStr.split(/\s+/).filter(b => b.trim() && !b.includes('='));
-                      payload.last_over = arr.slice(-6);
-                      if (payload.last_over.length === 0) payload.last_over = ["-", "-", "-", "-", "-", "-"];
-                  } else { payload.last_over = ["-", "-", "-", "-", "-", "-"]; }
-              }
-          } catch(e) { payload.last_over = ["E", "R", "R", "O", "R", "!"]; }
-
-          // ==========================================================
-          // [TARGET #13] PRO BOOKIE AI & LIVE MARKET SNIPER
-          // ==========================================================
-          try {
-              if (payload.live_score.includes('/')) {
-                  let scoreMatchClean = payload.live_score.match(/(\d+)[\/\-](\d+)\s*\(?([\d\.]+)\)?/);
-                  let batTeam = payload.live_score.split(' ')[0] || "Batting Team";
-
-                  if (scoreMatchClean) {
-                      let runs = parseInt(scoreMatchClean[1]); let wkts = parseInt(scoreMatchClean[2]);
-                      let oversSplit = scoreMatchClean[3].split('.');
-                      let overs = parseInt(oversSplit[0]); let balls = oversSplit[1] ? parseInt(oversSplit[1]) : 0;
-                      let totalBalls = (overs * 6) + balls;
-
-                      let recentRuns = 0; let validBalls = 0; let dotBalls = 0; let recentWicketFell = false;
-                      payload.last_over.forEach(b => {
-                          if (b === 'W') recentWicketFell = true;
-                          else if (b === 'Wd' || b === 'Nb') recentRuns += 1;
-                          else if (!isNaN(parseInt(b))) { 
-                              let val = parseInt(b); recentRuns += val; validBalls++; 
-                              if (val === 0) dotBalls++;
-                          }
-                      });
-                      
-                      let crr = parseFloat(payload.current_rr);
-                      if (isNaN(crr) || totalBalls === 0) crr = 8.5; 
-                      
-                      let recentRR = validBalls > 0 ? (recentRuns / validBalls) * 6 : crr;
-                      let blendedRR = totalBalls > 0 ? ((recentRR * 0.6) + (crr * 0.4)) : 8.5;
-                      
-                      let isChase = (payload.required_rr && !payload.required_rr.includes("REQ") && payload.required_rr !== "1st Innings" && payload.required_rr !== "Error");
-                      
-                      // --- [MI6 PATCH] TRUE MARKET ODDS EXTRACTION ---
-                      let safeOddsText = bodyText.replace(/\d+\s*Ov(?:ers?)?\s*Runs\s*\d+\s*\d+/gi, ''); 
-                      safeOddsText = safeOddsText.replace(/\d+\s*=\s*\d+/g, ''); 
-                      safeOddsText = safeOddsText.replace(/Open\s*\d+\s*Min\s*\d+\s*Max\s*\d+/gi, '');
-                      
-                      let allAliases = [...t1A, ...t2A].join('|');
-                      let oddsRegex = new RegExp(`\\b(${allAliases})\\b[^0-9]{0,30}?(\\d{1,2})\\s+(\\d{1,2})`, "i");
-                      let oddsMatch = safeOddsText.match(oddsRegex);
-
-                      if (oddsMatch) {
-                          let favTeam = oddsMatch[1].toUpperCase();
-                          let livePaise = parseInt(oddsMatch[2]);
-                          let livePaiseMax = parseInt(oddsMatch[3]);
-                          
-                          if (livePaise > 0 && livePaise < 100) {
-                              let winProb = (100 - (livePaise / 2)).toFixed(0); 
-                              payload.match_prediction = `[TRUE ODDS] ${favTeam} is Favorite at ${livePaise}-${livePaiseMax} Paise Win Probability: ${winProb}%|[ANALYSIS] Target acquired and verified.|[DIRECTIVE] 🟢 BOOK SET OPPORTUNITY. EAT (Lay) ${favTeam} at ${livePaise}p to recover initial stake and guarantee a Green Book.`;
-                          } else {
-                              payload.match_prediction = "[TRUE ODDS] Odds Out of Bounds|[ANALYSIS] Market fluctuation.|[DIRECTIVE] 🟡 HOLD.";
-                          }
-                      } else {
-                          payload.match_prediction = "[TRUE ODDS] Market Closed or Scanning...|[ANALYSIS] Awaiting valid odds.|[DIRECTIVE] 🟡 HOLD.";
-                      }
-
-                      // --- PHASE ORACLE PROJECTIONS ---
-                      let baseRun = runs > 0 ? runs : 0;
-                      let p6 = Math.max(baseRun, Math.floor(blendedRR * 6));
-                      let p10 = Math.max(baseRun, Math.floor(blendedRR * 10));
-                      let p15 = Math.max(baseRun, Math.floor(blendedRR * 15));
-                      let p20 = Math.max(baseRun, Math.floor(blendedRR * 20));
-                      
-                      payload.prediction = `TARGETS: [6v: ${p6}] [10v: ${p10}] [15v: ${p15}] [20v: ${p20}]\nTACTIC: 🟡 HOLD - STANDARD ACCUMULATION`;
-                      if (isChase) payload.prediction += `\nCHASE ORACLE ACTIVE`;
-                  }
-              }
-          } catch(e) { 
-              payload.prediction = "AI OFFLINE"; 
-              payload.match_prediction = "MARKET OFFLINE"; 
-          }
+          } catch(e) {}
       }
 
       return res.status(200).json({ success: true, match_info: payload });
-
   } catch (error) {
-      payload.status = "CRITICAL UPLINK FAILURE";
-      return res.status(500).json({ success: false, match_info: payload, error: error.message });
+      return res.status(500).json({ success: false, match_info: payload });
   }
 };
