@@ -4,7 +4,7 @@ const cheerio = require('cheerio');
 module.exports = async function (req, res) {
 
   // ==========================================
-  // ANTI CACHE
+  // HEADERS
   // ==========================================
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -13,15 +13,17 @@ module.exports = async function (req, res) {
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
 
-  if (req.method === 'OPTIONS') return res.status(200).end();
-
-  let targetUrl = req.query.url || "";
-  let targetTeams = (req.query.teams || "").toLowerCase().trim();
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
 
   const headers = {
     'User-Agent': 'Mozilla/5.0 (Linux; Android 13)',
     'Accept': 'text/html,application/xhtml+xml'
   };
+
+  let targetUrl = req.query.url || "";
+  let targetTeams = (req.query.teams || "").toLowerCase().trim();
 
   let payload = {
     title: "TARGET UNKNOWN",
@@ -42,44 +44,35 @@ module.exports = async function (req, res) {
     fetch_code: "OH"
   };
 
-  let pageTitle = "";
-  let bodyText = "";
-  let $ = null;
-
-  const teamAliases = {
-    "chennai": ["CSK", "CHENNAI", "SUPER KINGS"],
-    "lucknow": ["LSG", "LUCKNOW", "SUPER GIANTS"],
-    "mumbai": ["MI", "MUMBAI", "INDIANS"],
-    "punjab": ["PBKS", "PUNJAB", "KINGS"],
-    "delhi": ["DC", "DELHI", "CAPITALS"],
-    "gujarat": ["GT", "GUJARAT", "TITANS"],
-    "kolkata": ["KKR", "KOLKATA", "KNIGHT RIDERS"],
-    "rajasthan": ["RR", "RAJASTHAN", "ROYALS"],
-    "royal": ["RCB", "BENGALURU", "BANGALORE", "CHALLENGERS"],
-    "sunrisers": ["SRH", "HYDERABAD", "SUNRISERS"]
+  const teamCodes = {
+    csk: "CSK",
+    mi: "MI",
+    rcb: "RCB",
+    gt: "GT",
+    rr: "RR",
+    dc: "DC",
+    pbks: "PBKS",
+    srh: "SRH",
+    kkr: "KKR",
+    lsg: "LSG"
   };
 
-  function matchesTeams(txt) {
-    txt = txt.toLowerCase();
-
-    let parts = targetTeams.split(' vs ');
-    if (parts.length < 2) return true;
-
-    let t1 = parts[0].trim();
-    let t2 = parts[1].trim();
-
-    return txt.includes(t1) && txt.includes(t2);
+  function normalize(str) {
+    return (str || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9 ]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   try {
 
-    let timestampBuster = Date.now();
-
-    // ==========================================
-    // FETCH CREX
-    // ==========================================
+    let timestamp = Date.now();
     let crexUrl = "";
 
+    // ==========================================
+    // DIRECT URL
+    // ==========================================
     if (
       targetUrl.includes('crex.com') ||
       targetUrl.includes('crex.live')
@@ -87,24 +80,37 @@ module.exports = async function (req, res) {
       crexUrl = targetUrl;
     }
 
-    if (!crexUrl && targetTeams) {
+    // ==========================================
+    // AUTO FIND MATCH URL
+    // ==========================================
+    if (!crexUrl) {
 
-      const listRes = await axios.get(
-        `https://crex.com/fixtures/match-list?_t=${timestampBuster}`,
-        { headers, timeout: 4000 }
+      const fixtureRes = await axios.get(
+        `https://crex.com/fixtures/match-list?_t=${timestamp}`,
+        {
+          headers,
+          timeout: 5000
+        }
       );
 
-      const $$ = cheerio.load(listRes.data);
+      const $ = cheerio.load(fixtureRes.data);
 
-      $$('a').each((i, el) => {
+      $('a').each((i, el) => {
 
-        const txt = $$(el).text().toLowerCase();
-        const href = $$(el).attr('href') || "";
+        const href = $(el).attr('href') || "";
+        const txt = normalize($(el).text());
 
         if (
-          (txt.includes('ipl') || txt.includes('indian premier league')) &&
-          matchesTeams(txt + " " + href)
+          (
+            href.includes('/scoreboard/') ||
+            href.includes('/scorecard/') ||
+            href.includes('/live/')
+          ) &&
+          normalize(targetTeams)
+            .split(' vs ')
+            .every(t => txt.includes(t.trim()))
         ) {
+
           crexUrl = href.startsWith('http')
             ? href
             : 'https://crex.com' + href;
@@ -112,26 +118,37 @@ module.exports = async function (req, res) {
       });
     }
 
+    // ==========================================
+    // FAIL SAFE
+    // ==========================================
     if (!crexUrl) {
+
       payload.status = "MATCH LINK NOT FOUND";
+
       return res.status(200).json({
         success: false,
         match_info: payload
       });
     }
 
-    const crexRes = await axios.get(
-      `${crexUrl}?_t=${timestampBuster}`,
-      { headers, timeout: 5000 }
+    // ==========================================
+    // FETCH LIVE PAGE
+    // ==========================================
+    const pageRes = await axios.get(
+      `${crexUrl}?_t=${timestamp}`,
+      {
+        headers,
+        timeout: 7000
+      }
     );
 
-    $ = cheerio.load(crexRes.data);
+    const $ = cheerio.load(pageRes.data);
 
     $('script, style, noscript').remove();
 
-    pageTitle = $('title').text() || "";
+    const pageTitle = $('title').text() || "";
 
-    bodyText = $('body')
+    const bodyText = $('body')
       .text()
       .replace(/\s+/g, ' ')
       .trim();
@@ -143,17 +160,18 @@ module.exports = async function (req, res) {
     // TITLE
     // ==========================================
     payload.title = pageTitle
-      .replace(/live score/gi, '')
-      .replace(/cricket/gi, '')
+      .replace(/live score/ig, '')
+      .replace(/cricket/ig, '')
       .trim()
       .toUpperCase();
 
     // ==========================================
-    // LIVE SCORE
+    // SCORE
     // ==========================================
-    let scoreRegex = /([A-Z]{2,4})\s(\d+)\/(\d+)\s\(([\d\.]+)\)/i;
+    const scoreRegex =
+      /([A-Z]{2,4})\s(\d+)\/(\d+)\s\(([\d\.]+)\)/;
 
-    let scoreMatch = bodyText.match(scoreRegex);
+    const scoreMatch = bodyText.match(scoreRegex);
 
     if (scoreMatch) {
 
@@ -168,15 +186,12 @@ module.exports = async function (req, res) {
       payload.live_score = "Match Not Started";
     }
 
-    // ==========================================
-    // STATUS
-    // ==========================================
     payload.status = "Live Match Active";
 
     // ==========================================
     // CURRENT RR
     // ==========================================
-    let crrMatch = bodyText.match(/CRR[: ]([\d\.]+)/i);
+    const crrMatch = bodyText.match(/CRR[: ]([\d\.]+)/i);
 
     if (crrMatch) {
       payload.current_rr = crrMatch[1];
@@ -185,160 +200,103 @@ module.exports = async function (req, res) {
     // ==========================================
     // BATTERS
     // ==========================================
-    let batterRegex =
+    const batterRegex =
       /([A-Z][a-zA-Z\s]+)\s(\d+)\((\d+)\)/g;
 
-    let batters = [...bodyText.matchAll(batterRegex)];
+    const batterMatches =
+      [...bodyText.matchAll(batterRegex)];
 
-    if (batters.length >= 2) {
+    if (batterMatches.length >= 2) {
 
       payload.striker =
-        `${batters[0][1].trim()} ${batters[0][2]}(${batters[0][3]}) 🏏`;
+        `${batterMatches[0][1].trim()} ${batterMatches[0][2]}(${batterMatches[0][3]}) 🏏`;
 
       payload.non_striker =
-        `${batters[1][1].trim()} ${batters[1][2]}(${batters[1][3]})`;
+        `${batterMatches[1][1].trim()} ${batterMatches[1][2]}(${batterMatches[1][3]})`;
     }
 
     // ==========================================
-    // VENUE
+    // TRUE CREX MARKET ODDS
     // ==========================================
-    let venueMatch = bodyText.match(/Venue[: ]([^|]+)/i);
+    let cleanText = bodyText
+      .replace(/\s+/g, ' ')
+      .replace(/[|]/g, ' ');
 
-    if (venueMatch) {
-      payload.venue = venueMatch[1].trim();
-    }
+    let realOdds = null;
 
-    // ==========================================
-    // LAST OVER
-    // ==========================================
-    let recentMatch = bodyText.match(/Recent[: ]([0-9WwdNb\s]+)/i);
+    Object.values(teamCodes).forEach(team => {
 
-    if (recentMatch) {
+      if (realOdds) return;
 
-      payload.last_over = recentMatch[1]
-        .split(/\s+/)
-        .filter(x => x.trim())
-        .slice(-6);
-    }
-
-    // ==========================================
-    // PREDICTION ENGINE
-    // ==========================================
-    let scoreData = payload.live_score.match(
-      /([A-Z]{2,4})\s(\d+)\/(\d+)\s\(([\d\.]+)\)/
-    );
-
-    if (scoreData) {
-
-      let battingTeam = scoreData[1];
-      let runs = parseInt(scoreData[2]);
-      let wickets = parseInt(scoreData[3]);
-      let overs = parseFloat(scoreData[4]);
-
-      // ==========================================
-      // TARGET PREDICTION
-      // ==========================================
-      let projected20 =
-        Math.floor(runs + ((20 - overs) * parseFloat(payload.current_rr || 9)));
-
-      payload.prediction =
-        `TARGETS: [20v: ${projected20}] \nTACTIC: 🟢 PLAY (BACK) - HIGH AGGRESSION`;
-
-      // ==========================================
-      // TRUE CREX ODDS ENGINE
-      // ==========================================
-      let cleanBody = bodyText
-        .replace(/\s+/g, ' ')
-        .replace(/[|]/g, ' ')
-        .replace(/,/g, ' ');
-
-      let crexOdds = null;
-
-      const activeTeams = [];
-
-      Object.keys(teamAliases).forEach(key => {
-
-        teamAliases[key].forEach(alias => {
-
-          if (
-            payload.title.toUpperCase().includes(alias)
-          ) {
-            activeTeams.push(alias);
-          }
-        });
-      });
-
-      const uniqueTeams = [...new Set(activeTeams)];
-
-      // ==========================================
-      // STRICT GT 44 45 FORMAT ONLY
-      // ==========================================
-      for (let tm of uniqueTeams) {
-
-        const strictRegex = new RegExp(
-          `\\b${tm}\\b\\s+(\\d{1,3})\\s+(\\d{1,3})\\b`,
+      // STRICT GT 44 45 FORMAT
+      const oddsRegex =
+        new RegExp(
+          `\\b${team}\\b\\s+(\\d{1,3})\\s+(\\d{1,3})\\b`,
           'i'
         );
 
-        const match = cleanBody.match(strictRegex);
+      const m = cleanText.match(oddsRegex);
 
-        if (match) {
+      if (m) {
 
-          let back = parseInt(match[1]);
-          let lay = parseInt(match[2]);
+        const back = parseInt(m[1]);
+        const lay = parseInt(m[2]);
 
-          if (
-            back > 0 &&
-            lay > 0 &&
-            back <= 500 &&
-            lay <= 500 &&
-            Math.abs(back - lay) <= 30
-          ) {
+        if (
+          back > 0 &&
+          lay > 0 &&
+          back <= 500 &&
+          lay <= 500 &&
+          Math.abs(back - lay) <= 30
+        ) {
 
-            crexOdds = {
-              team: tm,
-              back,
-              lay
-            };
-
-            break;
-          }
+          realOdds = {
+            team,
+            back,
+            lay
+          };
         }
       }
+    });
+
+    // ==========================================
+    // AI PREDICTION
+    // ==========================================
+    if (scoreMatch) {
+
+      const battingTeam = scoreMatch[1];
+      const runs = parseInt(scoreMatch[2]);
+      const wickets = parseInt(scoreMatch[3]);
+      const overs = parseFloat(scoreMatch[4]);
+
+      let projected =
+        Math.floor(
+          runs + ((20 - overs) * parseFloat(payload.current_rr || 9))
+        );
+
+      payload.prediction =
+        `TARGETS: [20v: ${projected}] \nTACTIC: 🟢 PLAY (BACK) - HIGH AGGRESSION`;
 
       // ==========================================
       // USE REAL CREX ODDS
       // ==========================================
-      if (crexOdds) {
+      if (realOdds) {
 
-        const favTeam = crexOdds.team;
-        const back = crexOdds.back;
-        const lay = crexOdds.lay;
-
-        const probability =
-          (100 / (100 + back)) * 100;
+        let probability =
+          (100 / (100 + realOdds.back)) * 100;
 
         payload.match_prediction =
-          `[LIVE MARKET ODDS] ${favTeam} is Favorite at ${back}-${lay} Paise\n` +
+          `[LIVE MARKET ODDS] ${realOdds.team} is Favorite at ${realOdds.back}-${realOdds.lay} Paise\n` +
           `Win Probability: ${probability.toFixed(0)}%|` +
-          `[ANALYSIS] ${favTeam} is controlling the live market.|` +
-          `[DIRECTIVE] 🟢 PLAY (BACK) ${favTeam} at ${back}p or EAT at ${lay}p`;
+          `[ANALYSIS] ${realOdds.team} is controlling the live market.|` +
+          `[DIRECTIVE] 🟢 PLAY (BACK) ${realOdds.team} at ${realOdds.back}p or EAT at ${realOdds.lay}p`;
 
       } else {
 
-        // ==========================================
-        // FALLBACK AI ODDS
-        // ==========================================
-        let aiPaise = 45;
-
-        if (runs > 180 && wickets <= 3) {
-          aiPaise = 28;
-        }
-
         payload.match_prediction =
-          `[TRUE ODDS] ${battingTeam} is Favorite at ${aiPaise}-${aiPaise + 1} Paise\n` +
+          `[TRUE ODDS] ${battingTeam} is Favorite at 45-46 Paise\n` +
           `Win Probability: 65%|` +
-          `[ANALYSIS] AI generated fallback odds.|` +
+          `[ANALYSIS] AI fallback market active.|` +
           `[DIRECTIVE] 🟡 HOLD`;
       }
     }
