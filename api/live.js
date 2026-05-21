@@ -70,13 +70,12 @@ module.exports = async function (req, res) {
           try {
               let crexUrl = (targetUrl.includes('crex.com') || targetUrl.includes('crex.live')) ? targetUrl : "";
               if (!crexUrl && targetTeams) {
-                  // INCREASED TIMEOUT TO PREVENT VERCEL COLD START CRASH
                   const cxRes = await axios.get(`https://crex.com/fixtures/match-list?_t=${timestampBuster}`, { headers, timeout: 6000 });
                   const $temp = cheerio.load(cxRes.data);
                   $temp('a').each((i, el) => {
                       let txt = $temp(el).text().toLowerCase(); let href = $temp(el).attr('href') || ""; let strictTeamCheck = txt + " " + href;
                       if ((txt.includes('ipl') || txt.includes('indian premier league')) && (href.includes('score') || href.includes('match-updates')) && matchesTeams(strictTeamCheck)) {
-                          crexUrl = href.startsWith('http') ? href : 'https://crex.com' + href;
+                          crexUrl = href.startsWith('http') ? href : '[https://crex.com](https://crex.com)' + href;
                       }
                   });
               }
@@ -92,7 +91,7 @@ module.exports = async function (req, res) {
 
       if (!htmlAcquired) {
           try {
-              let cbUrl = targetUrl.includes('cricbuzz') ? targetUrl.replace('www.cricbuzz.com', 'm.cricbuzz.com') : ""; 
+              let cbUrl = targetUrl.includes('cricbuzz') ? targetUrl.replace('[www.cricbuzz.com](https://www.cricbuzz.com)', 'm.cricbuzz.com') : ""; 
               if (!cbUrl && targetTeams) {
                   const searchDirs = [ `https://m.cricbuzz.com/cricket-match/live-scores?_t=${timestampBuster}`, `https://m.cricbuzz.com/cricket-match/live-scores/upcoming?_t=${timestampBuster}` ];
                   for (let dir of searchDirs) {
@@ -100,7 +99,7 @@ module.exports = async function (req, res) {
                       const $temp = cheerio.load(res.data);
                       $temp('a').each((i, el) => {
                           let txt = $temp(el).text().toLowerCase(); let href = $temp(el).attr('href') || ""; let parentTxt = $temp(el).parent().parent().text().toLowerCase();
-                          if ((href.includes('indian-premier-league') || parentTxt.includes('ipl')) && href.match(/\/\d{4,}\//) && matchesTeams(txt + " " + href) && href.includes('scores')) cbUrl = 'https://m.cricbuzz.com' + href;
+                          if ((href.includes('indian-premier-league') || parentTxt.includes('ipl')) && href.match(/\/\d{4,}\//) && matchesTeams(txt + " " + href) && href.includes('scores')) cbUrl = '[https://m.cricbuzz.com](https://m.cricbuzz.com)' + href;
                       });
                       if (cbUrl) break;
                   }
@@ -178,9 +177,16 @@ module.exports = async function (req, res) {
           }
       } catch (e) { payload.match_state = "standby"; }
 
+      // --- [MI6 PATCH] TOSS EXTRACTION ---
       try {
           let tossMatch = bodyText.match(/([A-Za-z\s\.\-]+(?:won the toss|opt(?:ed|s)? to|elect(?:ed|s)? to|chose to)\s(?:bat|bowl|field))/i);
-          if (!tossMatch) tossMatch = bodyText.match(/Toss\s*:\s*([^•|{\(]+)/i);
+          if (!tossMatch) {
+              // Safety net for "Toss: CSK" formatting
+              let shortToss = bodyText.match(/Toss\s*[:\-]?\s*([A-Z]{2,4})/i);
+              if (shortToss) {
+                  tossMatch = [null, shortToss[1].toUpperCase() + " won the toss"];
+              }
+          }
           if (tossMatch) payload.toss = tossMatch[1].trim();
           else if (espnMatchData && espnMatchData.tossResults) payload.toss = espnMatchData.tossResults.text;
           if (payload.toss.length > 50) payload.toss = "Tracking Toss Data...";
@@ -346,11 +352,15 @@ module.exports = async function (req, res) {
                       safeOddsText = safeOddsText.replace(/\d+\s*=\s*\d+/g, ''); 
                       safeOddsText = safeOddsText.replace(/Open\s*\d+\s*Min\s*\d+\s*Max\s*\d+/gi, '');
                       
-                      let oddsRegex = /([A-Z]{2,4})\s*(?:[^\d]{0,15})?(\d{2})\s+(\d{2})/;
+                      let t1Code = (t1A[0] || "T1").toUpperCase();
+                      let t2Code = (t2A[0] || "T2").toUpperCase();
+                      
+                      // Case insensitive, matches team abbreviation, ignores non-digits up to 20 chars, then matches two 1-2 digit numbers
+                      let oddsRegex = new RegExp(`(${t1Code}|${t2Code})\\s*(?:[^\\d]{0,20})?\\b(\\d{1,2})\\b\\s+\\b(\\d{1,2})\\b`, "i");
                       let oddsMatch = safeOddsText.match(oddsRegex);
 
                       if (oddsMatch) {
-                          let favTeam = oddsMatch[1];
+                          let favTeam = oddsMatch[1].toUpperCase();
                           let livePaise = parseInt(oddsMatch[2]);
                           let livePaiseMax = parseInt(oddsMatch[3]);
                           
