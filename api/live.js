@@ -314,7 +314,82 @@ module.exports = async function (req, res) {
               }
           } catch(e) { payload.last_over = ["E", "R", "R", "O", "R", "!"]; }
 
-          // --- MI6 PATCH: ONLY TRUE MARKET ODDS UPDATED ---
+                  // ==========================================================
+          // [TARGET #13] PRO BOOKIE AI & LIVE MARKET SNIPER
+          // ==========================================================
+          try {
+              if (payload.live_score.includes('/')) {
+                  let scoreMatchClean = payload.live_score.match(/(\d+)[\/\-](\d+)\s*\(?([\d\.]+)\)?/);
+                  let batTeam = payload.live_score.split(' ')[0] || "Batting Team";
+
+                  if (scoreMatchClean) {
+                      let runs = parseInt(scoreMatchClean[1]); let wkts = parseInt(scoreMatchClean[2]);
+                      let oversSplit = scoreMatchClean[3].split('.');
+                      let overs = parseInt(oversSplit[0]); let balls = oversSplit[1] ? parseInt(oversSplit[1]) : 0;
+                      let totalBalls = (overs * 6) + balls;
+
+                      let recentRuns = 0; let validBalls = 0; let dotBalls = 0; let recentWicketFell = false;
+                      payload.last_over.forEach(b => {
+                          if (b === 'W') recentWicketFell = true;
+                          else if (b === 'Wd' || b === 'Nb') recentRuns += 1;
+                          else if (!isNaN(parseInt(b))) { 
+                              let val = parseInt(b); recentRuns += val; validBalls++; 
+                              if (val === 0) dotBalls++;
+                          }
+                      });
+                      
+                      let crr = parseFloat(payload.current_rr);
+                      if (isNaN(crr) || totalBalls === 0) crr = 8.5; 
+                      
+                      let recentRR = validBalls > 0 ? (recentRuns / validBalls) * 6 : crr;
+                      let blendedRR = totalBalls > 0 ? ((recentRR * 0.6) + (crr * 0.4)) : 8.5;
+                      
+                      let isChase = (payload.required_rr && !payload.required_rr.includes("REQ") && payload.required_rr !== "1st Innings" && payload.required_rr !== "Error");
+                      
+                      // --- [MI6 PATCH] TRUE MARKET ODDS EXTRACTION ---
+                      let safeOddsText = bodyText.replace(/\d+\s*Ov(?:ers?)?\s*Runs\s*\d+\s*\d+/gi, ''); 
+                      safeOddsText = safeOddsText.replace(/\d+\s*=\s*\d+/g, ''); 
+                      safeOddsText = safeOddsText.replace(/Open\s*\d+\s*Min\s*\d+\s*Max\s*\d+/gi, '');
+                      
+                      // Combine all known team names into one search list
+                      let allAliases = [...t1A, ...t2A].join('|');
+                      
+                      // RELAXED REGEX: Finds Team Name, ignores up to 30 hidden HTML/icon characters, then grabs the 2 numbers
+                      let oddsRegex = new RegExp(`\\b(${allAliases})\\b[^0-9]{0,30}?(\\d{1,2})\\s+(\\d{1,2})`, "i");
+                      let oddsMatch = safeOddsText.match(oddsRegex);
+
+                      if (oddsMatch) {
+                          let favTeam = oddsMatch[1].toUpperCase();
+                          let livePaise = parseInt(oddsMatch[2]);
+                          let livePaiseMax = parseInt(oddsMatch[3]);
+                          
+                          if (livePaise > 0 && livePaise < 100) {
+                              let winProb = (100 - (livePaise / 2)).toFixed(0); 
+                              payload.match_prediction = `[TRUE ODDS] ${favTeam} is Favorite at ${livePaise}-${livePaiseMax} Paise Win Probability: ${winProb}%|[ANALYSIS] Target acquired and verified.|[DIRECTIVE] 🟢 BOOK SET OPPORTUNITY. EAT (Lay) ${favTeam} at ${livePaise}p to recover initial stake and guarantee a Green Book.`;
+                          } else {
+                              payload.match_prediction = "[TRUE ODDS] Odds Out of Bounds|[ANALYSIS] Market fluctuation.|[DIRECTIVE] 🟡 HOLD.";
+                          }
+                      } else {
+                          payload.match_prediction = "[TRUE ODDS] Market Closed or Scanning...|[ANALYSIS] Awaiting valid odds.|[DIRECTIVE] 🟡 HOLD.";
+                      }
+
+                      // --- PHASE ORACLE PROJECTIONS ---
+                      let baseRun = runs > 0 ? runs : 0;
+                      let p6 = Math.max(baseRun, Math.floor(blendedRR * 6));
+                      let p10 = Math.max(baseRun, Math.floor(blendedRR * 10));
+                      let p15 = Math.max(baseRun, Math.floor(blendedRR * 15));
+                      let p20 = Math.max(baseRun, Math.floor(blendedRR * 20));
+                      
+                      payload.prediction = `TARGETS: [6v: ${p6}] [10v: ${p10}] [15v: ${p15}] [20v: ${p20}]\nTACTIC: 🟡 HOLD - STANDARD ACCUMULATION`;
+                      if (isChase) payload.prediction += `\nCHASE ORACLE ACTIVE`;
+                  }
+              }
+          } catch(e) { 
+              payload.prediction = "AI OFFLINE"; 
+              payload.match_prediction = "MARKET OFFLINE"; 
+          }
+
+        // --- MI6 PATCH: ONLY TRUE MARKET ODDS UPDATED ---
           try {
               if (payload.live_score.includes('/')) {
                   let scoreMatchClean = payload.live_score.match(/(\d+)[\/\-](\d+)\s*\(?([\d\.]+)\)?/);
