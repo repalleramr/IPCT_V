@@ -70,18 +70,19 @@ module.exports = async function (req, res) {
           try {
               let crexUrl = (targetUrl.includes('crex.com') || targetUrl.includes('crex.live')) ? targetUrl : "";
               if (!crexUrl && targetTeams) {
-                  const cxRes = await axios.get(`https://crex.com/fixtures/match-list?_t=${timestampBuster}`, { headers, timeout: 6000 });
+                  // Reverted to your original 2500 timeout to prevent UPLINK FAILED
+                  const cxRes = await axios.get(`https://crex.com/fixtures/match-list?_t=${timestampBuster}`, { headers, timeout: 2500 });
                   const $temp = cheerio.load(cxRes.data);
                   $temp('a').each((i, el) => {
                       let txt = $temp(el).text().toLowerCase(); let href = $temp(el).attr('href') || ""; let strictTeamCheck = txt + " " + href;
                       if ((txt.includes('ipl') || txt.includes('indian premier league')) && (href.includes('score') || href.includes('match-updates')) && matchesTeams(strictTeamCheck)) {
-                          crexUrl = href.startsWith('http') ? href : '[https://crex.com](https://crex.com)' + href;
+                          crexUrl = href.startsWith('http') ? href : 'https://crex.com' + href;
                       }
                   });
               }
               if (crexUrl) {
                   let fetchUrl = crexUrl.includes('?') ? `${crexUrl}&_t=${timestampBuster}` : `${crexUrl}?_t=${timestampBuster}`;
-                  const cRes = await axios.get(fetchUrl, { headers, timeout: 6000 });
+                  const cRes = await axios.get(fetchUrl, { headers, timeout: 3000 });
                   $ = cheerio.load(cRes.data); $('script, style, noscript').remove();
                   pageTitle = $('title').text() || ""; bodyText = $('body').text().replace(/\s+/g, ' ');
                   payload.source_url = "CREX (Tier 1 Speed)"; htmlAcquired = true;
@@ -91,15 +92,15 @@ module.exports = async function (req, res) {
 
       if (!htmlAcquired) {
           try {
-              let cbUrl = targetUrl.includes('cricbuzz') ? targetUrl.replace('[www.cricbuzz.com](https://www.cricbuzz.com)', 'm.cricbuzz.com') : ""; 
+              let cbUrl = targetUrl.includes('cricbuzz') ? targetUrl.replace('www.cricbuzz.com', 'm.cricbuzz.com') : ""; 
               if (!cbUrl && targetTeams) {
                   const searchDirs = [ `https://m.cricbuzz.com/cricket-match/live-scores?_t=${timestampBuster}`, `https://m.cricbuzz.com/cricket-match/live-scores/upcoming?_t=${timestampBuster}` ];
                   for (let dir of searchDirs) {
-                      const res = await axios.get(dir, { headers, timeout: 6000 });
+                      const res = await axios.get(dir, { headers, timeout: 2500 });
                       const $temp = cheerio.load(res.data);
                       $temp('a').each((i, el) => {
                           let txt = $temp(el).text().toLowerCase(); let href = $temp(el).attr('href') || ""; let parentTxt = $temp(el).parent().parent().text().toLowerCase();
-                          if ((href.includes('indian-premier-league') || parentTxt.includes('ipl')) && href.match(/\/\d{4,}\//) && matchesTeams(txt + " " + href) && href.includes('scores')) cbUrl = '[https://m.cricbuzz.com](https://m.cricbuzz.com)' + href;
+                          if ((href.includes('indian-premier-league') || parentTxt.includes('ipl')) && href.match(/\/\d{4,}\//) && matchesTeams(txt + " " + href) && href.includes('scores')) cbUrl = 'https://m.cricbuzz.com' + href;
                       });
                       if (cbUrl) break;
                   }
@@ -107,7 +108,7 @@ module.exports = async function (req, res) {
               if (cbUrl) {
                   cbUrl = cbUrl.replace('www.', 'm.').replace('/live-cricket-scorecard/', '/cricket-scores/');
                   let fetchUrl = cbUrl.includes('?') ? `${cbUrl}&_t=${timestampBuster}` : `${cbUrl}?_t=${timestampBuster}`;
-                  const cbRes = await axios.get(fetchUrl, { headers, timeout: 6000 });
+                  const cbRes = await axios.get(fetchUrl, { headers, timeout: 3500 });
                   $ = cheerio.load(cbRes.data); $('script, style, noscript').remove();
                   pageTitle = $('title').text() || ""; bodyText = $('body').text().replace(/\s+/g, ' ');
                   payload.source_url = "CRICBUZZ (Tier 2 Failsafe)"; htmlAcquired = true;
@@ -117,7 +118,7 @@ module.exports = async function (req, res) {
 
       if (!htmlAcquired) {
           try {
-              const espnRes = await axios.get(`https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current?_t=${timestampBuster}`, { headers, timeout: 6000 });
+              const espnRes = await axios.get(`https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current?_t=${timestampBuster}`, { headers, timeout: 3000 });
               espnMatchData = espnRes.data.matches.find(m => {
                   let isIPL = (m.series?.name?.toLowerCase().includes('ipl') || m.title.toLowerCase().includes('ipl'));
                   return isIPL && matchesTeams(m.title.toLowerCase() + " " + m.teams.map(t => t.team.abbreviation).join(" ").toLowerCase());
@@ -177,16 +178,14 @@ module.exports = async function (req, res) {
           }
       } catch (e) { payload.match_state = "standby"; }
 
-      // --- [MI6 PATCH] TOSS EXTRACTION ---
+      // --- [ONLY THE TOSS IS UPDATED HERE] ---
       try {
           let tossMatch = bodyText.match(/([A-Za-z\s\.\-]+(?:won the toss|opt(?:ed|s)? to|elect(?:ed|s)? to|chose to)\s(?:bat|bowl|field))/i);
           if (!tossMatch) {
-              // Safety net for "Toss: CSK" formatting
               let shortToss = bodyText.match(/Toss\s*[:\-]?\s*([A-Z]{2,4})/i);
-              if (shortToss) {
-                  tossMatch = [null, shortToss[1].toUpperCase() + " won the toss"];
-              }
+              if (shortToss) tossMatch = [null, shortToss[1].toUpperCase() + " won the toss"];
           }
+          if (!tossMatch) tossMatch = bodyText.match(/Toss\s*:\s*([^•|{\(]+)/i);
           if (tossMatch) payload.toss = tossMatch[1].trim();
           else if (espnMatchData && espnMatchData.tossResults) payload.toss = espnMatchData.tossResults.text;
           if (payload.toss.length > 50) payload.toss = "Tracking Toss Data...";
@@ -315,9 +314,7 @@ module.exports = async function (req, res) {
               }
           } catch(e) { payload.last_over = ["E", "R", "R", "O", "R", "!"]; }
 
-          // ==========================================================
-          // [TARGET #13] PRO BOOKIE AI & LIVE MARKET SNIPER
-          // ==========================================================
+          // --- MI6 PATCH: ONLY TRUE MARKET ODDS UPDATED ---
           try {
               if (payload.live_score.includes('/')) {
                   let scoreMatchClean = payload.live_score.match(/(\d+)[\/\-](\d+)\s*\(?([\d\.]+)\)?/);
@@ -347,15 +344,15 @@ module.exports = async function (req, res) {
                       
                       let isChase = (payload.required_rr && !payload.required_rr.includes("REQ") && payload.required_rr !== "1st Innings" && payload.required_rr !== "Error");
                       
-                      // --- [MI6 PATCH] TRUE MARKET ODDS EXTRACTION ---
+                      // Sanitize strings like "1 = 7" and "6 Ov Runs 66" before checking odds
                       let safeOddsText = bodyText.replace(/\d+\s*Ov(?:ers?)?\s*Runs\s*\d+\s*\d+/gi, ''); 
                       safeOddsText = safeOddsText.replace(/\d+\s*=\s*\d+/g, ''); 
                       safeOddsText = safeOddsText.replace(/Open\s*\d+\s*Min\s*\d+\s*Max\s*\d+/gi, '');
                       
-                      let t1Code = (t1A[0] || "T1").toUpperCase();
-                      let t2Code = (t2A[0] || "T2").toUpperCase();
+                      let t1Code = (t1A && t1A[0] ? t1A[0] : "T1").toUpperCase();
+                      let t2Code = (t2A && t2A[0] ? t2A[0] : "T2").toUpperCase();
                       
-                      // Case insensitive, matches team abbreviation, ignores non-digits up to 20 chars, then matches two 1-2 digit numbers
+                      // Case insensitive match, ignores up to 20 random non-digit characters in between 
                       let oddsRegex = new RegExp(`(${t1Code}|${t2Code})\\s*(?:[^\\d]{0,20})?\\b(\\d{1,2})\\b\\s+\\b(\\d{1,2})\\b`, "i");
                       let oddsMatch = safeOddsText.match(oddsRegex);
 
@@ -374,7 +371,6 @@ module.exports = async function (req, res) {
                           payload.match_prediction = "[TRUE ODDS] Market Closed or Scanning...|[ANALYSIS] Awaiting valid odds.|[DIRECTIVE] 🟡 HOLD.";
                       }
 
-                      // --- PHASE ORACLE PROJECTIONS ---
                       let baseRun = runs > 0 ? runs : 0;
                       let p6 = Math.max(baseRun, Math.floor(blendedRR * 6));
                       let p10 = Math.max(baseRun, Math.floor(blendedRR * 10));
