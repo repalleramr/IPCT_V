@@ -58,7 +58,7 @@ module.exports = async function (req, res) {
   }
 
   // CREX TRUE-PAISA ODDS EXTRACTOR
-  // Example: "GT 44 45" => team=GT, back=44, lay=45
+  // Upgraded to handle hyphens and slashes (e.g., "GT 44-45" or "GT 44/45")
   function extractCrexTrueOdds(text) {
     if (!text || typeof text !== "string") return null;
 
@@ -76,9 +76,9 @@ module.exports = async function (req, res) {
       "srh": ["srh", "sunrisers hyderabad", "sunrisers", "hyderabad"]
     };
 
-    // Prefer exact team-code style first: GT 44 45
+    // Prefer exact team-code style first: GT 44-45 or GT 44 45
     for (const code of Object.keys(teamMap)) {
-      const re = new RegExp(`\\b${code.toUpperCase()}\\b[^0-9]{0,20}(\\d{1,3})\\s+(\\d{1,3})\\b`, "i");
+      const re = new RegExp(`\\b${code.toUpperCase()}\\b[^0-9]{0,20}(\\d{1,3})[\\s\\-\\/]+(\\d{1,3})\\b`, "i");
       const m = flat.match(re);
       if (m) {
         const a = parseInt(m[1], 10);
@@ -97,7 +97,7 @@ module.exports = async function (req, res) {
     // Then try full-name / alias style
     for (const [code, aliases] of Object.entries(teamMap)) {
       for (const alias of aliases) {
-        const re = new RegExp(`\\b${escapeRegExp(alias)}\\b[^0-9]{0,20}(\\d{1,3})\\s+(\\d{1,3})\\b`, "i");
+        const re = new RegExp(`\\b${escapeRegExp(alias)}\\b[^0-9]{0,20}(\\d{1,3})[\\s\\-\\/]+(\\d{1,3})\\b`, "i");
         const m = flat.match(re);
         if (m) {
           const a = parseInt(m[1], 10);
@@ -234,7 +234,7 @@ module.exports = async function (req, res) {
       let statusLower = (statusText || "").toLowerCase();
 
       // ==========================================
-      // CORE SCORE FORMAT FIX (Handles missing parenthesis: MI 0-0 0.0)
+      // CORE SCORE FORMAT FIX
       // ==========================================
       let isLiveScoreFormat = bodyText.match(/[A-Z]{2,4}\s\d+[\/\-]\d+/);
 
@@ -247,12 +247,32 @@ module.exports = async function (req, res) {
       }
     } catch (e) { payload.match_state = "standby"; }
 
+    // ==========================================
+    // UPGRADED TOSS EXTRACTION
+    // First checks DOM elements natively before text fallback
+    // ==========================================
     try {
-      let tossMatch = bodyText.match(/([A-Za-z\s\.\-]+(?:won the toss|opt(?:ed|s)? to|elect(?:ed|s)? to|chose to)\s(?:bat|bowl|field))/i);
-      if (!tossMatch) tossMatch = bodyText.match(/Toss\s*:\s*([^•|{\(]+)/i);
-      if (tossMatch) payload.toss = tossMatch[1].trim();
-      else if (espnMatchData && espnMatchData.tossResults) payload.toss = espnMatchData.tossResults.text;
-      if (payload.toss.length > 50) payload.toss = "Tracking Toss Data...";
+      let tossResult = "";
+      if ($) {
+        // Target exact CSS classes commonly used for Toss on CREX & Cricbuzz
+        tossResult = $('.cb-toss-sts, .toss-result, .match-info-toss, .toss, .toss-text, .match-detail-toss').first().text().trim();
+      }
+      
+      if (!tossResult) {
+        let tossMatch = bodyText.match(/([A-Za-z\s\.\-]+(?:won the toss|opt(?:ed|s)? to|elect(?:ed|s)? to|chose to|decided to)\s(?:bat|bowl|field)(?:\sfirst)?)/i);
+        if (!tossMatch) tossMatch = bodyText.match(/Toss\s*:\s*([^•|{\(]+)/i);
+        if (tossMatch) tossResult = tossMatch[1].trim();
+      }
+
+      if (!tossResult && espnMatchData && espnMatchData.tossResults) {
+        tossResult = espnMatchData.tossResults.text;
+      }
+
+      if (tossResult && tossResult.length > 5 && tossResult.length < 100) {
+        payload.toss = tossResult;
+      } else {
+        payload.toss = "Tracking Toss Data...";
+      }
     } catch (e) { payload.toss = "Toss Error"; }
 
     if (payload.match_state === "live") {
@@ -267,7 +287,6 @@ module.exports = async function (req, res) {
       } catch (e) { payload.status = "Status Error"; }
 
       try {
-        // ADVANCED SCORE EXTRACTION: Captures both MI 0/0 (0.0) and MI 0-0 0.0
         let scoreRegex = /([A-Z]{2,4}\s\d+[\/\-]\d+\s*\(?\d+\.\d+\)?)/;
         let scoreMatch = pageTitle.match(scoreRegex);
         if (!scoreMatch) scoreMatch = bodyText.match(scoreRegex);
@@ -478,7 +497,6 @@ module.exports = async function (req, res) {
 
             // ==========================================
             // THE ULTIMATE MARKET SNIPER
-            // NOW PRIORITIZES TRUE CREX PAISA ODDS
             // ==========================================
             const teamMap = {
               "chennai super kings": "CSK", "csk": "CSK", "chennai": "CSK",
@@ -493,13 +511,11 @@ module.exports = async function (req, res) {
               "sunrisers hyderabad": "SRH", "srh": "SRH", "hyderabad": "SRH"
             };
 
-            // 1) Prefer true odds only when the source is CREX
             let crexOdds = null;
             if (payload.source_url && payload.source_url.toLowerCase().includes("crex")) {
               crexOdds = extractCrexTrueOdds(pageTitle) || extractCrexTrueOdds(bodyText);
             }
 
-            // 2) If CREX gave us a valid pair, use it exactly
             if (crexOdds && crexOdds.team && crexOdds.back && crexOdds.lay) {
               favTeam = crexOdds.team;
               favPaise = crexOdds.back;
@@ -508,7 +524,6 @@ module.exports = async function (req, res) {
               maxProb = (100 / (100 + favPaise)) * 100;
               isRealMarket = true;
             } else {
-              // 3) Keep your existing fallback odds extraction as-is
               let teamsPattern = Object.keys(teamMap).join('|');
               let oddsRegex = new RegExp(`(${teamsPattern})[\\s\\W]*?(\\d{1,3})\\s+(\\d{1,3})\\b(?!\\s*[-/\\(\\)])`, 'i');
               let numViewMatch = bodyText.match(oddsRegex);
