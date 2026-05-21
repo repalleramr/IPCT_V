@@ -57,8 +57,7 @@ module.exports = async function (req, res) {
     return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
-  // CREX TRUE-PAISA ODDS EXTRACTOR
-  // Upgraded to handle hyphens and slashes (e.g., "GT 44-45" or "GT 44/45")
+  // CREX TRUE-PAISA ODDS EXTRACTOR [PATCHED FOR SPREAD ACCURACY]
   function extractCrexTrueOdds(text) {
     if (!text || typeof text !== "string") return null;
 
@@ -76,14 +75,16 @@ module.exports = async function (req, res) {
       "srh": ["srh", "sunrisers hyderabad", "sunrisers", "hyderabad"]
     };
 
-    // Prefer exact team-code style first: GT 44-45 or GT 44 45
+    // Prefer exact team-code style first: GT 26 27 or GT 26-27
     for (const code of Object.keys(teamMap)) {
-      const re = new RegExp(`\\b${code.toUpperCase()}\\b[^0-9]{0,20}(\\d{1,3})[\\s\\-\\/]+(\\d{1,3})\\b`, "i");
+      // Removed slash [\/] so it strictly avoids score structures like 14/1
+      const re = new RegExp(`\\b${code.toUpperCase()}\\b[^0-9]{0,20}(\\d{1,3})[\\s\\-]+(\\d{1,3})\\b`, "i");
       const m = flat.match(re);
       if (m) {
         const a = parseInt(m[1], 10);
         const b = parseInt(m[2], 10);
-        if (a > 0 && b > 0 && a <= 999 && b <= 999) {
+        // STRICT SPREAD FILTER: Rejects if difference between numbers is greater than 3
+        if (a > 0 && b > 0 && a <= 150 && b <= 150 && Math.abs(a - b) <= 3) {
           return {
             team: code.toUpperCase(),
             back: Math.min(a, b),
@@ -97,12 +98,13 @@ module.exports = async function (req, res) {
     // Then try full-name / alias style
     for (const [code, aliases] of Object.entries(teamMap)) {
       for (const alias of aliases) {
-        const re = new RegExp(`\\b${escapeRegExp(alias)}\\b[^0-9]{0,20}(\\d{1,3})[\\s\\-\\/]+(\\d{1,3})\\b`, "i");
+        const re = new RegExp(`\\b${escapeRegExp(alias)}\\b[^0-9]{0,20}(\\d{1,3})[\\s\\-]+(\\d{1,3})\\b`, "i");
         const m = flat.match(re);
         if (m) {
           const a = parseInt(m[1], 10);
           const b = parseInt(m[2], 10);
-          if (a > 0 && b > 0 && a <= 999 && b <= 999) {
+          // STRICT SPREAD FILTER: Rejects scores mistaken as odds
+          if (a > 0 && b > 0 && a <= 150 && b <= 150 && Math.abs(a - b) <= 3) {
             return {
               team: code.toUpperCase(),
               back: Math.min(a, b),
