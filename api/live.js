@@ -57,7 +57,7 @@ module.exports = async function (req, res) {
     return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
-  // CREX TRUE-PAISA ODDS EXTRACTOR [PATCHED FOR SPREAD ACCURACY]
+  // CREX TRUE-PAISA ODDS EXTRACTOR [ANTI-MERGE PATCH ADDED]
   function extractCrexTrueOdds(text) {
     if (!text || typeof text !== "string") return null;
 
@@ -75,16 +75,16 @@ module.exports = async function (req, res) {
       "srh": ["srh", "sunrisers hyderabad", "sunrisers", "hyderabad"]
     };
 
-    // Prefer exact team-code style first: GT 26 27 or GT 26-27
+    // Prefer exact team-code style first: GT 09 10 or GT 09-10
     for (const code of Object.keys(teamMap)) {
-      // Removed slash [\/] so it strictly avoids score structures like 14/1
-      const re = new RegExp(`\\b${code.toUpperCase()}\\b[^0-9]{0,20}(\\d{1,3})[\\s\\-]+(\\d{1,3})\\b`, "i");
+      // Expanded padding to 40 characters to skip UI icons between text
+      const re = new RegExp(`\\b${code.toUpperCase()}\\b[^0-9]{0,40}(\\d{1,3})[\\s\\-]+(\\d{1,3})\\b`, "i");
       const m = flat.match(re);
       if (m) {
         const a = parseInt(m[1], 10);
         const b = parseInt(m[2], 10);
-        // STRICT SPREAD FILTER: Rejects if difference between numbers is greater than 3
-        if (a > 0 && b > 0 && a <= 150 && b <= 150 && Math.abs(a - b) <= 3) {
+        // STRICT SPREAD FILTER: Rejects if difference is larger than 4 to prevent catching scores
+        if (a > 0 && b > 0 && a <= 150 && b <= 150 && Math.abs(a - b) <= 4) {
           return {
             team: code.toUpperCase(),
             back: Math.min(a, b),
@@ -98,13 +98,12 @@ module.exports = async function (req, res) {
     // Then try full-name / alias style
     for (const [code, aliases] of Object.entries(teamMap)) {
       for (const alias of aliases) {
-        const re = new RegExp(`\\b${escapeRegExp(alias)}\\b[^0-9]{0,20}(\\d{1,3})[\\s\\-]+(\\d{1,3})\\b`, "i");
+        const re = new RegExp(`\\b${escapeRegExp(alias)}\\b[^0-9]{0,40}(\\d{1,3})[\\s\\-]+(\\d{1,3})\\b`, "i");
         const m = flat.match(re);
         if (m) {
           const a = parseInt(m[1], 10);
           const b = parseInt(m[2], 10);
-          // STRICT SPREAD FILTER: Rejects scores mistaken as odds
-          if (a > 0 && b > 0 && a <= 150 && b <= 150 && Math.abs(a - b) <= 3) {
+          if (a > 0 && b > 0 && a <= 150 && b <= 150 && Math.abs(a - b) <= 4) {
             return {
               team: code.toUpperCase(),
               back: Math.min(a, b),
@@ -149,7 +148,13 @@ module.exports = async function (req, res) {
           let fetchUrl = crexUrl.includes('?') ? `${crexUrl}&_t=${timestampBuster}` : `${crexUrl}?_t=${timestampBuster}`;
           const cRes = await axios.get(fetchUrl, { headers, timeout: 3000 });
           $ = cheerio.load(cRes.data); $('script, style, noscript').remove();
-          pageTitle = $('title').text() || ""; bodyText = $('body').text().replace(/\s+/g, ' ');
+          pageTitle = $('title').text() || ""; 
+          
+          // CRITICAL FIX: Forces spaces between UI blocks so 09 and 10 don't merge into 0910
+          let rawHtml = $('body').html() || "";
+          rawHtml = rawHtml.replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&');
+          bodyText = rawHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+          
           payload.source_url = "CREX (Tier 1 Speed)"; htmlAcquired = true;
         }
       } catch (e) { }
@@ -178,7 +183,13 @@ module.exports = async function (req, res) {
           let fetchUrl = cbUrl.includes('?') ? `${cbUrl}&_t=${timestampBuster}` : `${cbUrl}?_t=${timestampBuster}`;
           const cbRes = await axios.get(fetchUrl, { headers, timeout: 3500 });
           $ = cheerio.load(cbRes.data); $('script, style, noscript').remove();
-          pageTitle = $('title').text() || ""; bodyText = $('body').text().replace(/\s+/g, ' ');
+          pageTitle = $('title').text() || ""; 
+          
+          // Apply same merge fix to Cricbuzz
+          let rawHtml = $('body').html() || "";
+          rawHtml = rawHtml.replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&');
+          bodyText = rawHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
           payload.source_url = "CRICBUZZ (Tier 2 Failsafe)"; htmlAcquired = true;
         }
       } catch (e) { }
@@ -251,12 +262,10 @@ module.exports = async function (req, res) {
 
     // ==========================================
     // UPGRADED TOSS EXTRACTION
-    // First checks DOM elements natively before text fallback
     // ==========================================
     try {
       let tossResult = "";
       if ($) {
-        // Target exact CSS classes commonly used for Toss on CREX & Cricbuzz
         tossResult = $('.cb-toss-sts, .toss-result, .match-info-toss, .toss, .toss-text, .match-detail-toss').first().text().trim();
       }
       
