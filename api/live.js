@@ -70,18 +70,19 @@ module.exports = async function (req, res) {
           try {
               let crexUrl = (targetUrl.includes('crex.com') || targetUrl.includes('crex.live')) ? targetUrl : "";
               if (!crexUrl && targetTeams) {
-                  const cxRes = await axios.get(`https://crex.com/fixtures/match-list?_t=${timestampBuster}`, { headers, timeout: 2500 });
+                  // INCREASED TIMEOUT TO PREVENT VERCEL COLD START CRASH
+                  const cxRes = await axios.get(`https://crex.com/fixtures/match-list?_t=${timestampBuster}`, { headers, timeout: 6000 });
                   const $temp = cheerio.load(cxRes.data);
                   $temp('a').each((i, el) => {
                       let txt = $temp(el).text().toLowerCase(); let href = $temp(el).attr('href') || ""; let strictTeamCheck = txt + " " + href;
                       if ((txt.includes('ipl') || txt.includes('indian premier league')) && (href.includes('score') || href.includes('match-updates')) && matchesTeams(strictTeamCheck)) {
-                          crexUrl = href.startsWith('http') ? href : '[https://crex.com](https://crex.com)' + href;
+                          crexUrl = href.startsWith('http') ? href : 'https://crex.com' + href;
                       }
                   });
               }
               if (crexUrl) {
                   let fetchUrl = crexUrl.includes('?') ? `${crexUrl}&_t=${timestampBuster}` : `${crexUrl}?_t=${timestampBuster}`;
-                  const cRes = await axios.get(fetchUrl, { headers, timeout: 3000 });
+                  const cRes = await axios.get(fetchUrl, { headers, timeout: 6000 });
                   $ = cheerio.load(cRes.data); $('script, style, noscript').remove();
                   pageTitle = $('title').text() || ""; bodyText = $('body').text().replace(/\s+/g, ' ');
                   payload.source_url = "CREX (Tier 1 Speed)"; htmlAcquired = true;
@@ -91,15 +92,15 @@ module.exports = async function (req, res) {
 
       if (!htmlAcquired) {
           try {
-              let cbUrl = targetUrl.includes('cricbuzz') ? targetUrl.replace('[www.cricbuzz.com](https://www.cricbuzz.com)', 'm.cricbuzz.com') : ""; 
+              let cbUrl = targetUrl.includes('cricbuzz') ? targetUrl.replace('www.cricbuzz.com', 'm.cricbuzz.com') : ""; 
               if (!cbUrl && targetTeams) {
                   const searchDirs = [ `https://m.cricbuzz.com/cricket-match/live-scores?_t=${timestampBuster}`, `https://m.cricbuzz.com/cricket-match/live-scores/upcoming?_t=${timestampBuster}` ];
                   for (let dir of searchDirs) {
-                      const res = await axios.get(dir, { headers, timeout: 2500 });
+                      const res = await axios.get(dir, { headers, timeout: 6000 });
                       const $temp = cheerio.load(res.data);
                       $temp('a').each((i, el) => {
                           let txt = $temp(el).text().toLowerCase(); let href = $temp(el).attr('href') || ""; let parentTxt = $temp(el).parent().parent().text().toLowerCase();
-                          if ((href.includes('indian-premier-league') || parentTxt.includes('ipl')) && href.match(/\/\d{4,}\//) && matchesTeams(txt + " " + href) && href.includes('scores')) cbUrl = '[https://m.cricbuzz.com](https://m.cricbuzz.com)' + href;
+                          if ((href.includes('indian-premier-league') || parentTxt.includes('ipl')) && href.match(/\/\d{4,}\//) && matchesTeams(txt + " " + href) && href.includes('scores')) cbUrl = 'https://m.cricbuzz.com' + href;
                       });
                       if (cbUrl) break;
                   }
@@ -107,7 +108,7 @@ module.exports = async function (req, res) {
               if (cbUrl) {
                   cbUrl = cbUrl.replace('www.', 'm.').replace('/live-cricket-scorecard/', '/cricket-scores/');
                   let fetchUrl = cbUrl.includes('?') ? `${cbUrl}&_t=${timestampBuster}` : `${cbUrl}?_t=${timestampBuster}`;
-                  const cbRes = await axios.get(fetchUrl, { headers, timeout: 3500 });
+                  const cbRes = await axios.get(fetchUrl, { headers, timeout: 6000 });
                   $ = cheerio.load(cbRes.data); $('script, style, noscript').remove();
                   pageTitle = $('title').text() || ""; bodyText = $('body').text().replace(/\s+/g, ' ');
                   payload.source_url = "CRICBUZZ (Tier 2 Failsafe)"; htmlAcquired = true;
@@ -117,7 +118,7 @@ module.exports = async function (req, res) {
 
       if (!htmlAcquired) {
           try {
-              const espnRes = await axios.get(`https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current?_t=${timestampBuster}`, { headers, timeout: 3000 });
+              const espnRes = await axios.get(`https://hs-consumer-api.espncricinfo.com/v1/pages/matches/current?_t=${timestampBuster}`, { headers, timeout: 6000 });
               espnMatchData = espnRes.data.matches.find(m => {
                   let isIPL = (m.series?.name?.toLowerCase().includes('ipl') || m.title.toLowerCase().includes('ipl'));
                   return isIPL && matchesTeams(m.title.toLowerCase() + " " + m.teams.map(t => t.team.abbreviation).join(" ").toLowerCase());
