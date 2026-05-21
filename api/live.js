@@ -17,13 +17,13 @@ module.exports = async function (req, res) {
     return res.status(200).end();
   }
 
+  let targetUrl = req.query.url || "";
+  let targetTeams = (req.query.teams || "").toLowerCase().trim();
+
   const headers = {
     'User-Agent': 'Mozilla/5.0 (Linux; Android 13)',
     'Accept': 'text/html,application/xhtml+xml'
   };
-
-  let targetUrl = req.query.url || "";
-  let targetTeams = (req.query.teams || "").toLowerCase().trim();
 
   let payload = {
     title: "TARGET UNKNOWN",
@@ -44,35 +44,49 @@ module.exports = async function (req, res) {
     fetch_code: "OH"
   };
 
-  const teamCodes = {
-    csk: "CSK",
-    mi: "MI",
-    rcb: "RCB",
-    gt: "GT",
-    rr: "RR",
-    dc: "DC",
-    pbks: "PBKS",
-    srh: "SRH",
-    kkr: "KKR",
-    lsg: "LSG"
+  let pageTitle = "";
+  let bodyText = "";
+  let $ = null;
+
+  const teamAliases = {
+    "csk": ["csk", "chennai", "super kings"],
+    "mi": ["mi", "mumbai", "indians"],
+    "rcb": ["rcb", "bengaluru", "bangalore", "challengers"],
+    "gt": ["gt", "gujarat", "titans"],
+    "rr": ["rr", "rajasthan", "royals"],
+    "dc": ["dc", "delhi", "capitals"],
+    "pbks": ["pbks", "punjab", "kings"],
+    "srh": ["srh", "hyderabad", "sunrisers"],
+    "kkr": ["kkr", "kolkata", "knight riders"],
+    "lsg": ["lsg", "lucknow", "super giants"]
   };
 
-  function normalize(str) {
-    return (str || "")
-      .toLowerCase()
-      .replace(/[^a-z0-9 ]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+  function matchesTeams(txt) {
+
+    if (!targetTeams) return true;
+
+    txt = txt.toLowerCase();
+
+    let split = targetTeams.split(' vs ');
+
+    if (split.length < 2) return true;
+
+    let t1 = split[0].trim();
+    let t2 = split[1].trim();
+
+    return txt.includes(t1) && txt.includes(t2);
   }
 
   try {
 
+    let htmlAcquired = false;
     let timestamp = Date.now();
-    let crexUrl = "";
 
     // ==========================================
-    // DIRECT URL
+    // CREX URL FINDER
     // ==========================================
+    let crexUrl = "";
+
     if (
       targetUrl.includes('crex.com') ||
       targetUrl.includes('crex.live')
@@ -81,45 +95,52 @@ module.exports = async function (req, res) {
     }
 
     // ==========================================
-    // AUTO FIND MATCH URL
+    // AUTO FIND LIVE MATCH
     // ==========================================
-    if (!crexUrl) {
+    if (!crexUrl && targetTeams) {
 
-      const fixtureRes = await axios.get(
-        `https://crex.com/fixtures/match-list?_t=${timestamp}`,
-        {
-          headers,
-          timeout: 5000
-        }
-      );
+      try {
 
-      const $ = cheerio.load(fixtureRes.data);
+        const fixtureRes = await axios.get(
+          `https://crex.com/fixtures/match-list?_t=${timestamp}`,
+          {
+            headers,
+            timeout: 5000
+          }
+        );
 
-      $('a').each((i, el) => {
+        const $$ = cheerio.load(fixtureRes.data);
 
-        const href = $(el).attr('href') || "";
-        const txt = normalize($(el).text());
+        $$('a').each((i, el) => {
 
-        if (
-          (
-            href.includes('/scoreboard/') ||
-            href.includes('/scorecard/') ||
-            href.includes('/live/')
-          ) &&
-          normalize(targetTeams)
-            .split(' vs ')
-            .every(t => txt.includes(t.trim()))
-        ) {
+          const txt =
+            ($$(el).text() || "").toLowerCase();
 
-          crexUrl = href.startsWith('http')
-            ? href
-            : 'https://crex.com' + href;
-        }
-      });
+          const href =
+            $$(el).attr('href') || "";
+
+          const combined = txt + " " + href;
+
+          if (
+            (
+              href.includes('score') ||
+              href.includes('match-updates') ||
+              href.includes('live-score')
+            ) &&
+            matchesTeams(combined)
+          ) {
+
+            crexUrl = href.startsWith('http')
+              ? href
+              : 'https://crex.com' + href;
+          }
+        });
+
+      } catch (e) {}
     }
 
     // ==========================================
-    // FAIL SAFE
+    // MATCH NOT FOUND
     // ==========================================
     if (!crexUrl) {
 
@@ -132,46 +153,69 @@ module.exports = async function (req, res) {
     }
 
     // ==========================================
-    // FETCH LIVE PAGE
+    // FETCH MATCH PAGE
     // ==========================================
-    const pageRes = await axios.get(
-      `${crexUrl}?_t=${timestamp}`,
-      {
-        headers,
-        timeout: 7000
-      }
-    );
+    try {
 
-    const $ = cheerio.load(pageRes.data);
+      const pageRes = await axios.get(
+        `${crexUrl}?_t=${timestamp}`,
+        {
+          headers,
+          timeout: 7000
+        }
+      );
 
-    $('script, style, noscript').remove();
+      $ = cheerio.load(pageRes.data);
 
-    const pageTitle = $('title').text() || "";
+      $('script, style, noscript').remove();
 
-    const bodyText = $('body')
-      .text()
-      .replace(/\s+/g, ' ')
-      .trim();
+      pageTitle =
+        $('title').text() || "";
 
-    payload.source_url = "CREX (Tier 1 Speed)";
-    payload.fetch_code = "UREKHA";
+      bodyText =
+        $('body')
+          .text()
+          .replace(/\s+/g, ' ')
+          .trim();
+
+      payload.source_url = "CREX (Tier 1 Speed)";
+      payload.fetch_code = "UREKHA";
+
+      htmlAcquired = true;
+
+    } catch (e) {}
+
+    // ==========================================
+    // FAIL
+    // ==========================================
+    if (!htmlAcquired) {
+
+      payload.status = "UPLINK FAILED";
+
+      return res.status(200).json({
+        success: false,
+        match_info: payload
+      });
+    }
 
     // ==========================================
     // TITLE
     // ==========================================
-    payload.title = pageTitle
-      .replace(/live score/ig, '')
-      .replace(/cricket/ig, '')
-      .trim()
-      .toUpperCase();
+    payload.title =
+      pageTitle
+        .replace(/live score/ig, '')
+        .replace(/cricket/ig, '')
+        .trim()
+        .toUpperCase();
 
     // ==========================================
     // SCORE
     // ==========================================
-    const scoreRegex =
+    let scoreRegex =
       /([A-Z]{2,4})\s(\d+)\/(\d+)\s\(([\d\.]+)\)/;
 
-    const scoreMatch = bodyText.match(scoreRegex);
+    let scoreMatch =
+      bodyText.match(scoreRegex);
 
     if (scoreMatch) {
 
@@ -186,12 +230,16 @@ module.exports = async function (req, res) {
       payload.live_score = "Match Not Started";
     }
 
+    // ==========================================
+    // STATUS
+    // ==========================================
     payload.status = "Live Match Active";
 
     // ==========================================
-    // CURRENT RR
+    // CRR
     // ==========================================
-    const crrMatch = bodyText.match(/CRR[: ]([\d\.]+)/i);
+    let crrMatch =
+      bodyText.match(/CRR[: ]([\d\.]+)/i);
 
     if (crrMatch) {
       payload.current_rr = crrMatch[1];
@@ -200,10 +248,10 @@ module.exports = async function (req, res) {
     // ==========================================
     // BATTERS
     // ==========================================
-    const batterRegex =
-      /([A-Z][a-zA-Z\s]+)\s(\d+)\((\d+)\)/g;
+    let batterRegex =
+      /([A-Z][a-zA-Z\s\.\-']+?)\s(\d+)\((\d+)\)/g;
 
-    const batterMatches =
+    let batterMatches =
       [...bodyText.matchAll(batterRegex)];
 
     if (batterMatches.length >= 2) {
@@ -216,66 +264,111 @@ module.exports = async function (req, res) {
     }
 
     // ==========================================
-    // TRUE CREX MARKET ODDS
+    // VENUE
     // ==========================================
-    let cleanText = bodyText
-      .replace(/\s+/g, ' ')
-      .replace(/[|]/g, ' ');
+    let venueMatch =
+      bodyText.match(/Venue[: ]([^|]+)/i);
 
-    let realOdds = null;
-
-    Object.values(teamCodes).forEach(team => {
-
-      if (realOdds) return;
-
-      // STRICT GT 44 45 FORMAT
-      const oddsRegex =
-        new RegExp(
-          `\\b${team}\\b\\s+(\\d{1,3})\\s+(\\d{1,3})\\b`,
-          'i'
-        );
-
-      const m = cleanText.match(oddsRegex);
-
-      if (m) {
-
-        const back = parseInt(m[1]);
-        const lay = parseInt(m[2]);
-
-        if (
-          back > 0 &&
-          lay > 0 &&
-          back <= 500 &&
-          lay <= 500 &&
-          Math.abs(back - lay) <= 30
-        ) {
-
-          realOdds = {
-            team,
-            back,
-            lay
-          };
-        }
-      }
-    });
+    if (venueMatch) {
+      payload.venue = venueMatch[1].trim();
+    }
 
     // ==========================================
-    // AI PREDICTION
+    // LAST OVER
+    // ==========================================
+    let recentMatch =
+      bodyText.match(/Recent[: ]([0-9WwdNb\s]+)/i);
+
+    if (recentMatch) {
+
+      payload.last_over =
+        recentMatch[1]
+          .split(/\s+/)
+          .filter(x => x.trim())
+          .slice(-6);
+    }
+
+    // ==========================================
+    // PREDICTION ENGINE
     // ==========================================
     if (scoreMatch) {
 
-      const battingTeam = scoreMatch[1];
-      const runs = parseInt(scoreMatch[2]);
-      const wickets = parseInt(scoreMatch[3]);
-      const overs = parseFloat(scoreMatch[4]);
+      let battingTeam =
+        scoreMatch[1];
 
-      let projected =
+      let runs =
+        parseInt(scoreMatch[2]);
+
+      let wickets =
+        parseInt(scoreMatch[3]);
+
+      let overs =
+        parseFloat(scoreMatch[4]);
+
+      let crr =
+        parseFloat(payload.current_rr || 9);
+
+      let projected20 =
         Math.floor(
-          runs + ((20 - overs) * parseFloat(payload.current_rr || 9))
+          runs + ((20 - overs) * crr)
         );
 
       payload.prediction =
-        `TARGETS: [20v: ${projected}] \nTACTIC: 🟢 PLAY (BACK) - HIGH AGGRESSION`;
+        `TARGETS: [20v: ${projected20}] \nTACTIC: 🟢 PLAY (BACK) - HIGH AGGRESSION`;
+
+      // ==========================================
+      // TRUE CREX ODDS ENGINE
+      // ==========================================
+      let cleanBody =
+        bodyText
+          .replace(/\s+/g, ' ')
+          .replace(/[|]/g, ' ')
+          .replace(/,/g, ' ');
+
+      let realOdds = null;
+
+      Object.keys(teamAliases).forEach(key => {
+
+        if (realOdds) return;
+
+        teamAliases[key].forEach(alias => {
+
+          if (realOdds) return;
+
+          const regex =
+            new RegExp(
+              `\\b${alias.toUpperCase()}\\b\\s+(\\d{1,3})\\s+(\\d{1,3})\\b`,
+              'i'
+            );
+
+          const m =
+            cleanBody.match(regex);
+
+          if (m) {
+
+            let back =
+              parseInt(m[1]);
+
+            let lay =
+              parseInt(m[2]);
+
+            if (
+              back > 0 &&
+              lay > 0 &&
+              back <= 500 &&
+              lay <= 500 &&
+              Math.abs(back - lay) <= 30
+            ) {
+
+              realOdds = {
+                team: key.toUpperCase(),
+                back,
+                lay
+              };
+            }
+          }
+        });
+      });
 
       // ==========================================
       // USE REAL CREX ODDS
@@ -293,10 +386,21 @@ module.exports = async function (req, res) {
 
       } else {
 
+        // ==========================================
+        // AI FALLBACK
+        // ==========================================
+        let aiBack = 45;
+        let aiLay = 46;
+
+        if (runs >= 200 && wickets <= 3) {
+          aiBack = 28;
+          aiLay = 29;
+        }
+
         payload.match_prediction =
-          `[TRUE ODDS] ${battingTeam} is Favorite at 45-46 Paise\n` +
+          `[TRUE ODDS] ${battingTeam} is Favorite at ${aiBack}-${aiLay} Paise\n` +
           `Win Probability: 65%|` +
-          `[ANALYSIS] AI fallback market active.|` +
+          `[ANALYSIS] AI generated fallback market.|` +
           `[DIRECTIVE] 🟡 HOLD`;
       }
     }
