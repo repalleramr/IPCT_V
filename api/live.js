@@ -2,7 +2,6 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 
 module.exports = async function (req, res) {
-  // --- AGGRESSIVE ANTI-CACHING ARMOR ---
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -17,7 +16,6 @@ module.exports = async function (req, res) {
   let rawDateStr = req.query.time || "";
   let targetDate = rawDateStr.split('(')[0].trim().toLowerCase();
   
-  // Ledger/Position Tracking Parameter
   let userPosition = (req.query.position || "NONE").toUpperCase().trim();
 
   const headers = {
@@ -109,14 +107,6 @@ module.exports = async function (req, res) {
     return null;
   }
 
-  // Helper for Positional Race Extraction
-  function getSearchKey(nameStr) {
-      if (!nameStr) return "";
-      let clean = nameStr.replace(/[^a-zA-Z\s]/g, '').trim();
-      let parts = clean.split(/\s+/).filter(w => w.length > 2);
-      return parts.length > 0 ? parts[parts.length - 1].toLowerCase() : clean.toLowerCase();
-  }
-
   let t1 = targetTeams.split(' vs ')[0]?.trim().split(' ')[0] || "unknown";
   let t2 = targetTeams.split(' vs ')[1]?.trim().split(' ')[0] || "unknown";
   const t1A = teamAliases[t1] || [t1]; const t2A = teamAliases[t2] || [t2];
@@ -146,15 +136,12 @@ module.exports = async function (req, res) {
           let fetchUrl = crexUrl.includes('?') ? `${crexUrl}&_t=${timestampBuster}` : `${crexUrl}?_t=${timestampBuster}`;
           const cRes = await axios.get(fetchUrl, { headers, timeout: 3000 });
           $ = cheerio.load(cRes.data); $('script, style, noscript').remove();
-          
-          // ==========================================
-          // DOM ARTIFACT INJECTOR (Fixes Invisible SVGs)
-          // ==========================================
-          $('svg').after(' * ');
-          $('img[src*="bat"]').after(' * ');
-          
           pageTitle = $('title').text() || ""; 
           let rawHtml = $('body').html() || "";
+          
+          rawHtml = rawHtml.replace(/<svg[^>]*>.*?<\/svg>/gi, ' *BAT* ');
+          rawHtml = rawHtml.replace(/<img[^>]*(bat|striker|active)[^>]*>/gi, ' *BAT* ');
+          
           rawHtml = rawHtml.replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&');
           bodyText = rawHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
           payload.source_url = "CREX (Tier 1 Speed)"; htmlAcquired = true;
@@ -185,11 +172,12 @@ module.exports = async function (req, res) {
           let fetchUrl = cbUrl.includes('?') ? `${cbUrl}&_t=${timestampBuster}` : `${cbUrl}?_t=${timestampBuster}`;
           const cbRes = await axios.get(fetchUrl, { headers, timeout: 3500 });
           $ = cheerio.load(cbRes.data); $('script, style, noscript').remove();
-          
-          $('.cb-font-bold').append(' * '); // Cricbuzz Artifact Injection
-          
           pageTitle = $('title').text() || ""; 
           let rawHtml = $('body').html() || "";
+          
+          rawHtml = rawHtml.replace(/<svg[^>]*>.*?<\/svg>/gi, ' *BAT* ');
+          rawHtml = rawHtml.replace(/<img[^>]*(bat|striker|active)[^>]*>/gi, ' *BAT* ');
+          
           rawHtml = rawHtml.replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&');
           bodyText = rawHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
           payload.source_url = "CRICBUZZ (Tier 2 Failsafe)"; htmlAcquired = true;
@@ -313,82 +301,70 @@ module.exports = async function (req, res) {
         }
       } catch (e) { payload.current_rr = "Error"; payload.required_rr = "Error"; }
 
-      // ==========================================
-      // STABLE SLOTS + TRIPLE-THREAT STRIKER ENGINE
-      // ==========================================
+      // ==========================================================
+      // [FINAL FIX] IRONCLAD STRIKER EXTRACTION
+      // ==========================================================
       try {
-        let b1Full = ""; let b2Full = "";
+        let safeText = bodyText.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([a-zA-Z])(\d)/g, '$1 $2');
         
-        let titleBatterRegex = /\(([A-Za-z\s\.\-'\*]+?\s*\d{1,3}\*?\s*\(\s*\d{1,3}\s*\)\*?)(?:\s*,\s*([A-Za-z\s\.\-'\*]+?\s*\d{1,3}\*?\s*\(\s*\d{1,3}\s*\)\*?))?\)/;
-        let titleMatch = pageTitle.match(titleBatterRegex);
+        // Upgraded Regex: Catch asterisks attached to runs e.g. 51*(23) or 51 *(23)
+        let batterRegex = /([A-Z][a-zA-Z\s\.\-']{2,25}?)\s*(?:\*BAT\*|\*|🏏)?\s+(\d{1,3})\s*\*?\s*\(\s*(\d{1,3})\s*\)/g;
+        let matches = [...safeText.matchAll(batterRegex)];
+        let validBatters = [];
 
-        if (titleMatch && titleMatch[1]) {
-          b1Full = titleMatch[1].trim(); b2Full = titleMatch[2] ? titleMatch[2].trim() : "";
+        matches.forEach(m => {
+          let rawName = m[1].trim();
+          let nameOnly = rawName.replace(/[A-Z]{3,}/g, '').trim();
+          let words = nameOnly.split(/\s+/);
+          nameOnly = words.slice(-2).join(' ');
+
+          if (nameOnly.length > 2 && !nameOnly.toLowerCase().includes('total')) {
+            // Check the absolute matched string to see if the asterisk or BAT SVG was caught
+            let isStriker = m[0].includes('*') || m[0].includes('BAT') || m[0].includes('🏏');
+
+            validBatters.push({
+              name: nameOnly,
+              text: `${nameOnly} ${m[2]}(${m[3]})`,
+              isStriker: isStriker
+            });
+          }
+        });
+
+        // Deduplicate the list to ensure we only have two batters maximum
+        let uniqueBatters = [];
+        validBatters.forEach(b => {
+           if (!uniqueBatters.find(u => u.name === b.name)) uniqueBatters.push(b);
+        });
+
+        if (uniqueBatters.length > 0) {
+          let b1 = uniqueBatters[0];
+          let b2 = uniqueBatters.length > 1 ? uniqueBatters[1] : null;
+
+          // Directly assign based on who triggered the isStriker flag
+          if (b1.isStriker && (!b2 || !b2.isStriker)) {
+              payload.striker = b1.text + " 🏏";
+              payload.non_striker = b2 ? b2.text : "Off-Strike";
+          } else if (b2 && b2.isStriker && !b1.isStriker) {
+              payload.striker = b2.text + " 🏏";
+              payload.non_striker = b1.text;
+          } else {
+              // Fallback if neither got the flag (safety net)
+              payload.striker = b1.text + " 🏏";
+              payload.non_striker = b2 ? b2.text : "Off-Strike";
+          }
         } else {
-          let safeText = bodyText.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([a-zA-Z])(\d)/g, '$1 $2');
-          let batIdx = safeText.lastIndexOf("Batter");
-          if (batIdx === -1) batIdx = safeText.search(/Batsman/i);
-          let searchArea = batIdx !== -1 ? safeText.substring(batIdx, batIdx + 300) : safeText;
-
-          // Regex designed to catch the dynamically injected asterisk
-          let batterRegex = /([A-Z][a-zA-Z\s\.\-']{2,25}?)\s*(\*)?\s+(\d{1,3})\s*(\*)?\s*\(\s*(\d{1,3})\s*\)/g;
-          let matches = [...searchArea.matchAll(batterRegex)];
-          let validBatters = [];
-
-          matches.forEach(m => {
-            let nameOnly = m[1].replace(/[A-Z]{3,}/g, '').trim();
-            let hasStar = (m[2] === '*' || m[4] === '*') ? '*' : '';
-            let words = nameOnly.split(/\s+/);
-            nameOnly = words.slice(-2).join(' ');
-            if (nameOnly.length > 2 && !nameOnly.toLowerCase().includes('total')) validBatters.push(`${nameOnly}${hasStar} ${m[3]}(${m[5]})`);
-          });
-
-          if (validBatters.length > 0) { b1Full = validBatters[0]; if (validBatters.length > 1) b2Full = validBatters[1]; }
+          payload.striker = "Target Engaged"; payload.non_striker = "Off-Strike";
         }
 
-        if (b1Full) {
-          let isN1Striker = true;
-          
-          if (b2Full.includes('*')) {
-              isN1Striker = false;
-          } else if (b1Full.includes('*')) {
-              isN1Striker = true;
-          } else {
-              // Positional Race Fallback
-              let name1Match = b1Full.match(/([A-Za-z\s\.\-']+)/);
-              let name1 = name1Match ? name1Match[1].trim() : b1Full.split(' ')[0];
-              let name2Match = b2Full ? b2Full.match(/([A-Za-z\s\.\-']+)/) : null;
-              let name2 = name2Match ? name2Match[1].trim() : (b2Full ? b2Full.split(' ')[0] : "");
-              
-              let safeText = bodyText.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([a-zA-Z])(\d)/g, '$1 $2');
-              let batIdx = safeText.search(/Batter|Batsman/i);
-              let searchArea = batIdx !== -1 ? safeText.substring(batIdx, batIdx + 800).toLowerCase() : safeText.toLowerCase();
-              
-              let k1 = getSearchKey(name1);
-              let k2 = getSearchKey(name2);
-              
-              let p1 = k1 ? searchArea.indexOf(k1) : -1;
-              let p2 = k2 ? searchArea.indexOf(k2) : -1;
-
-              if (p2 !== -1 && p1 !== -1 && p2 < p1) {
-                  isN1Striker = false;
-              } else if (p1 === -1 && p2 !== -1) {
-                  isN1Striker = false;
-              }
-          }
-
-          b1Full = b1Full.replace(/\*/g, '').trim();
-          b2Full = b2Full ? b2Full.replace(/\*/g, '').trim() : "";
-
-          if (isN1Striker) {
-            payload.striker = b1Full + " 🏏"; payload.non_striker = b2Full || "Off-Strike";
-          } else {
-            payload.striker = b1Full; payload.non_striker = b2Full + " 🏏";
-          }
-        } else { payload.striker = "Target Engaged"; payload.non_striker = "Off-Strike"; }
-
-        if (payload.live_score && payload.live_score.includes('0/0 (0.0)')) { payload.striker = "Awaiting Batters"; payload.non_striker = "Standby"; }
-      } catch (e) { payload.striker = "Extractor Error"; payload.non_striker = "Extractor Error"; }
+        if (payload.live_score && payload.live_score.includes('0/0 (0.0)')) { 
+            payload.striker = "Awaiting Batters"; 
+            payload.non_striker = "Standby"; 
+        }
+      } catch (e) { 
+          payload.striker = "Extractor Error"; 
+          payload.non_striker = "Extractor Error"; 
+      }
+      // ==========================================================
 
       try {
         let safeText = bodyText.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([a-zA-Z])(\d)/g, '$1 $2');
@@ -420,9 +396,6 @@ module.exports = async function (req, res) {
         }
       } catch (e) { payload.last_over = ["E", "R", "R", "O", "R", "!"]; }
 
-      // ==========================================================
-      // [TARGET #13] PRO BOOKIE AI & LIVE MARKET SNIPER + RISK MGMT
-      // ==========================================================
       try {
         if (payload.live_score.includes('/')) {
           let scoreMatchClean = payload.live_score.match(/(\d+)[\/\-](\d+)\s*\(?([\d\.]+)\)?/);
@@ -454,7 +427,6 @@ module.exports = async function (req, res) {
             let isChase = (payload.required_rr && !payload.required_rr.includes("REQ") && payload.required_rr !== "1st Innings" && payload.required_rr !== "Error");
             let rrrVal = isChase ? parseFloat(payload.required_rr) : 0;
             
-            // --- WEATHER/DLS CIRCUIT BREAKER ---
             let isWeatherInterrupted = (payload.status.toLowerCase().includes('rain') || payload.status.toLowerCase().includes('weather') || payload.status.toLowerCase().includes('dls'));
 
             if (isChase) { 
