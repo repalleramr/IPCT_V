@@ -303,28 +303,27 @@ module.exports = async function (req, res) {
       } catch (e) { payload.current_rr = "Error"; payload.required_rr = "Error"; }
 
       // ==========================================================
-      // [FINAL TRUNCATION FIX] IRONCLAD STRIKER EXTRACTION
+      // [SMART CONTEXT SHIELD FIX] IRONCLAD STRIKER EXTRACTION
       // ==========================================================
       try {
         let safeText = bodyText.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([a-zA-Z])(\d)/g, '$1 $2');
         let batIdx = safeText.lastIndexOf("Batter");
         if (batIdx === -1) batIdx = safeText.search(/Batsman/i);
-        let searchArea = batIdx !== -1 ? safeText.substring(batIdx, batIdx + 300) : safeText;
-
-        // CRITICAL FIX: Cut the search area off before it hits the partnership or last wicket stats.
-        // This ensures the regex CANNOT read a dismissed batsman from the "Last Wkt" text.
-        let cutoffIdx = searchArea.search(/(P'ship|Partnership|Last wkt|Last wicket|Bowler)/i);
-        if (cutoffIdx !== -1) {
-            searchArea = searchArea.substring(0, cutoffIdx);
-        }
+        let searchArea = batIdx !== -1 ? safeText.substring(batIdx, batIdx + 500) : safeText;
         
         let batterRegex = /([A-Z][a-zA-Z\s\.\-']{2,25}?)\s*(?:\*BAT\*|\*|🏏)?\s+(\d{1,3})\s*\*?\s*\(\s*(\d{1,3})\s*\)/g;
-        
-        // Notice we are running matchAll on 'searchArea', NOT 'safeText'
         let matches = [...searchArea.matchAll(batterRegex)];
         let validBatters = [];
 
         matches.forEach(m => {
+          // Check 40 characters immediately before the player's name
+          let contextBefore = searchArea.substring(Math.max(0, m.index - 40), m.index).toLowerCase();
+          
+          // Anti-Dead-Batsman Shield: Instantly ignore any player listed right after "last wkt"
+          if (contextBefore.includes('last wkt') || contextBefore.includes('last wicket') || contextBefore.includes('fall')) {
+              return; 
+          }
+
           let rawName = m[1].trim();
           let nameOnly = rawName.replace(/[A-Z]{3,}/g, '').trim();
           let words = nameOnly.split(/\s+/);
@@ -404,9 +403,6 @@ module.exports = async function (req, res) {
         }
       } catch (e) { payload.last_over = ["E", "R", "R", "O", "R", "!"]; }
 
-      // ==========================================================
-      // [TARGET #13] PRO BOOKIE AI & LIVE MARKET SNIPER + RISK MGMT
-      // ==========================================================
       try {
         if (payload.live_score.includes('/')) {
           let scoreMatchClean = payload.live_score.match(/(\d+)[\/\-](\d+)\s*\(?([\d\.]+)\)?/);
