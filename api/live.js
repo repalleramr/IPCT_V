@@ -2,6 +2,7 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 
 module.exports = async function (req, res) {
+  // --- AGGRESSIVE ANTI-CACHING ARMOR ---
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -302,14 +303,25 @@ module.exports = async function (req, res) {
       } catch (e) { payload.current_rr = "Error"; payload.required_rr = "Error"; }
 
       // ==========================================================
-      // [FINAL FIX] IRONCLAD STRIKER EXTRACTION
+      // [FINAL TRUNCATION FIX] IRONCLAD STRIKER EXTRACTION
       // ==========================================================
       try {
         let safeText = bodyText.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([a-zA-Z])(\d)/g, '$1 $2');
+        let batIdx = safeText.lastIndexOf("Batter");
+        if (batIdx === -1) batIdx = safeText.search(/Batsman/i);
+        let searchArea = batIdx !== -1 ? safeText.substring(batIdx, batIdx + 300) : safeText;
+
+        // CRITICAL FIX: Cut the search area off before it hits the partnership or last wicket stats.
+        // This ensures the regex CANNOT read a dismissed batsman from the "Last Wkt" text.
+        let cutoffIdx = searchArea.search(/(P'ship|Partnership|Last wkt|Last wicket|Bowler)/i);
+        if (cutoffIdx !== -1) {
+            searchArea = searchArea.substring(0, cutoffIdx);
+        }
         
-        // Upgraded Regex: Catch asterisks attached to runs e.g. 51*(23) or 51 *(23)
         let batterRegex = /([A-Z][a-zA-Z\s\.\-']{2,25}?)\s*(?:\*BAT\*|\*|🏏)?\s+(\d{1,3})\s*\*?\s*\(\s*(\d{1,3})\s*\)/g;
-        let matches = [...safeText.matchAll(batterRegex)];
+        
+        // Notice we are running matchAll on 'searchArea', NOT 'safeText'
+        let matches = [...searchArea.matchAll(batterRegex)];
         let validBatters = [];
 
         matches.forEach(m => {
@@ -319,7 +331,6 @@ module.exports = async function (req, res) {
           nameOnly = words.slice(-2).join(' ');
 
           if (nameOnly.length > 2 && !nameOnly.toLowerCase().includes('total')) {
-            // Check the absolute matched string to see if the asterisk or BAT SVG was caught
             let isStriker = m[0].includes('*') || m[0].includes('BAT') || m[0].includes('🏏');
 
             validBatters.push({
@@ -330,7 +341,6 @@ module.exports = async function (req, res) {
           }
         });
 
-        // Deduplicate the list to ensure we only have two batters maximum
         let uniqueBatters = [];
         validBatters.forEach(b => {
            if (!uniqueBatters.find(u => u.name === b.name)) uniqueBatters.push(b);
@@ -340,7 +350,6 @@ module.exports = async function (req, res) {
           let b1 = uniqueBatters[0];
           let b2 = uniqueBatters.length > 1 ? uniqueBatters[1] : null;
 
-          // Directly assign based on who triggered the isStriker flag
           if (b1.isStriker && (!b2 || !b2.isStriker)) {
               payload.striker = b1.text + " 🏏";
               payload.non_striker = b2 ? b2.text : "Off-Strike";
@@ -348,7 +357,6 @@ module.exports = async function (req, res) {
               payload.striker = b2.text + " 🏏";
               payload.non_striker = b1.text;
           } else {
-              // Fallback if neither got the flag (safety net)
               payload.striker = b1.text + " 🏏";
               payload.non_striker = b2 ? b2.text : "Off-Strike";
           }
@@ -396,6 +404,9 @@ module.exports = async function (req, res) {
         }
       } catch (e) { payload.last_over = ["E", "R", "R", "O", "R", "!"]; }
 
+      // ==========================================================
+      // [TARGET #13] PRO BOOKIE AI & LIVE MARKET SNIPER + RISK MGMT
+      // ==========================================================
       try {
         if (payload.live_score.includes('/')) {
           let scoreMatchClean = payload.live_score.match(/(\d+)[\/\-](\d+)\s*\(?([\d\.]+)\)?/);
