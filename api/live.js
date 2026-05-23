@@ -562,6 +562,7 @@ module.exports = async function (req, res) {
                 else matchTactic += `[DIRECTIVE] 🔴 DEAD MARKET. Do not put fresh capital in at ${favPaise}p. Risk-to-reward is mathematically unviable.`;
               } 
               else if (maxProb > 80 || favPaise <= 25) {
+                // SETTING THE BOOK OR STOP LOSS
                 if (userPosition === favTeam) {
                     matchTactic += `[DIRECTIVE] 🟢 BOOK SET OPPORTUNITY. You have a position on ${favTeam}. EAT (Lay) ${favTeam} at ${layPaise}p to recover initial stake and guarantee a Green Book.`;
                 } else if (userPosition !== "NONE" && userPosition !== favTeam) {
@@ -570,15 +571,56 @@ module.exports = async function (req, res) {
                 } else {
                     matchTactic += `[DIRECTIVE] 🟡 HOLD / NO ENTRY. Odds are too low (${favPaise}p) to Back ${favTeam} safely. Wait for a wicket spike.`;
                 }
-              } else if (isChase) {
-                if (totalBalls === 0) matchTactic += `[DIRECTIVE] 🟡 PLAY (Back) ${favTeam} at ${favPaise}p if supporting the favorite, or HOLD.`;
-                else if (maxProb < 15 && favTeam !== batTeam) matchTactic += `[DIRECTIVE] 🔴 EAT (Lay) ${batTeam} heavily at ${layPaise}p if odds spike on a boundary.`;
-                else if (rrrVal > 9.5 && wkts < 4) matchTactic += `[DIRECTIVE] 🔴 EAT (Lay) ${batTeam} at ${layPaise}p. Wait for panic.`;
-                else matchTactic += `[DIRECTIVE] 🟡 SCALP ENTRY: Wait for a 15-20 paise swing before entering a new position.`;
               } else {
-                if (totalBalls === 0) matchTactic += `[DIRECTIVE] 🟡 PLAY (Back) ${favTeam} at ${favPaise}p if supporting the favorite, or HOLD.`;
-                else if (wkts >= 5 || matchupState === "BOWLER_DOMINATING") matchTactic += `[DIRECTIVE] 🔴 EAT (Lay) ${batTeam} at ${layPaise}p. Bowling team in absolute control.`;
-                else matchTactic += `[DIRECTIVE] 🟡 HOLD. Watch the final explosion before committing capital.`;
+                // MID-TIER MARKET (26p to 80p) - SMARTER AI TRADING LOGIC
+                let isBattingFav = (favTeam === batTeam);
+
+                if (isChase) {
+                  if (totalBalls === 0) {
+                      matchTactic += `[DIRECTIVE] 🟡 HOLD. Wait for powerplay momentum before entering.`;
+                  } else if (isBattingFav) {
+                      // Favorite is batting/chasing
+                      if (crr >= (rrrVal - 1.5) && wkts <= 4 && matchupState !== "BOWLER_DOMINATING") {
+                          matchTactic += `[DIRECTIVE] 🟢 PLAY (Back) ${favTeam} at ${favPaise}p. Chase is under control and moving well.`;
+                      } else if (rrrVal > 11 || matchupState === "BOWLER_DOMINATING" || wkts >= 5) {
+                          matchTactic += `[DIRECTIVE] 🔴 EAT (Lay) ${favTeam} at ${layPaise}p. Pressure is building, expect odds to drift upwards.`;
+                      } else {
+                          matchTactic += `[DIRECTIVE] 🟡 HOLD. Consolidating phase. Wait for a 10-15 paise swing.`;
+                      }
+                  } else {
+                      // Favorite is bowling (Defending)
+                      if (crr < rrrVal && matchupState !== "BATTER_DOMINATING") {
+                          matchTactic += `[DIRECTIVE] 🟢 PLAY (Back) ${favTeam} at ${favPaise}p. Bowling team is choking the run flow.`;
+                      } else if (matchupState === "BATTER_DOMINATING" || (crr >= rrrVal && wkts <= 3)) {
+                          matchTactic += `[DIRECTIVE] 🔴 EAT (Lay) ${favTeam} at ${layPaise}p. Batting team is counter-attacking. Wait for panic in odds.`;
+                      } else {
+                          matchTactic += `[DIRECTIVE] 🟡 SCALP ENTRY. Wait for a wicket or big over before taking position.`;
+                      }
+                  }
+                } else {
+                  // 1st Innings
+                  if (totalBalls === 0) {
+                      matchTactic += `[DIRECTIVE] 🟡 PLAY (Back) ${favTeam} at ${favPaise}p if supporting the favorite, or HOLD.`;
+                  } else if (isBattingFav) {
+                      // Favorite is batting first
+                      if (matchupState === "BATTER_DOMINATING" || (wkts <= 3 && blendedRR > 8.0)) {
+                          matchTactic += `[DIRECTIVE] 🟢 PLAY (Back) ${favTeam} at ${favPaise}p. Batting team is dictating the pace.`;
+                      } else if (matchupState === "BOWLER_DOMINATING" || wkts >= 5) {
+                          matchTactic += `[DIRECTIVE] 🔴 EAT (Lay) ${favTeam} at ${layPaise}p. Bowling side is breaking momentum.`;
+                      } else {
+                          matchTactic += `[DIRECTIVE] 🟡 HOLD. Watch the upcoming overs before committing capital.`;
+                      }
+                  } else {
+                      // Favorite is bowling first
+                      if (matchupState === "BOWLER_DOMINATING" || wkts >= 4) {
+                          matchTactic += `[DIRECTIVE] 🟢 PLAY (Back) ${favTeam} at ${favPaise}p. Bowling team in absolute control.`;
+                      } else if (matchupState === "BATTER_DOMINATING") {
+                          matchTactic += `[DIRECTIVE] 🔴 EAT (Lay) ${favTeam} at ${layPaise}p. Batters finding easy boundaries.`;
+                      } else {
+                          matchTactic += `[DIRECTIVE] 🟡 HOLD. Wait for the death overs explosion.`;
+                      }
+                  }
+                }
               }
             }
 
