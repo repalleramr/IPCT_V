@@ -1,6 +1,8 @@
 // ==============================================================================
 // MI6 QUANTUM ORACLE - FULL FIXED BUILD
-// Version: 10.2.0 FINAL MOBILE REPLACE BUILD
+// Version: 10.3.0 MOBILE REPLACE BUILD
+// Fixes: invalid score parsing, live/future mismatch, bowler extraction,
+// last over extraction, odds extraction, and brittle row mixing.
 // ==============================================================================
 const axios = require('axios');
 const cheerio = require('cheerio');
@@ -31,6 +33,7 @@ module.exports = async function (req, res) {
   const headers = {
     'User-Agent': 'Mozilla/5.0 (Linux; Android 13)',
     'Accept': '*/*',
+    'Accept-Language': 'en-US,en;q=0.9',
     'Cache-Control': 'no-cache',
     'Pragma': 'no-cache'
   };
@@ -65,7 +68,7 @@ module.exports = async function (req, res) {
   };
 
   // ==============================================================================
-  // TEAM ALIASES
+  // HELPERS
   // ==============================================================================
   const teamAliases = {
     "chennai": ["csk", "chennai", "super kings"],
@@ -97,6 +100,27 @@ module.exports = async function (req, res) {
     return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
+  function normalize(str) {
+    return String(str || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9 ]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function dedupeSimilarStrings(arr) {
+    const out = [];
+    arr.forEach(item => {
+      const low = item.toLowerCase();
+      const exists = out.find(x => {
+        const xl = x.toLowerCase();
+        return xl === low || xl.includes(low) || low.includes(xl);
+      });
+      if (!exists) out.push(item);
+    });
+    return out;
+  }
+
   let t1 = targetTeams.split(' vs ')[0]?.trim().split(' ')[0] || "unknown";
   let t2 = targetTeams.split(' vs ')[1]?.trim().split(' ')[0] || "unknown";
 
@@ -105,133 +129,303 @@ module.exports = async function (req, res) {
 
   function matchesTeams(txt) {
     if (!txt) return false;
-    return t1A.some(a => txt.includes(a)) &&
-           t2A.some(a => txt.includes(a));
+    const n = normalize(txt);
+    return t1A.some(a => n.includes(normalize(a))) && t2A.some(a => n.includes(normalize(a)));
   }
 
+  function extractTeamCodeFromText(text) {
+    const n = normalize(text);
+    for (const [code, aliases] of Object.entries(teamAliases)) {
+      if (aliases.some(a => n.includes(normalize(a)))) return code.toUpperCase();
+    }
+    return "";
+  }
+
+  function isValidScore(runs, wickets, overs) {
+    return (
+      Number.isFinite(runs) &&
+      Number.isFinite(wickets) &&
+      Number.isFinite(overs) &&
+      runs >= 0 &&
+      runs <= 400 &&
+      wickets >= 0 &&
+      wickets <= 10 &&
+      overs >= 0 &&
+      overs <= 50
+    );
+  }
+
+  function extractScoreFromText(text) {
+    if (!text) return null;
+
+    const candidates = [];
+    const re = /([A-Z]{2,4})\s*(\d{1,3})[\/\-](\d{1,2})\s*\(?(\d{1,2}\.\d{1,2})\)?/gi;
+    let m;
+
+    while ((m = re.exec(text)) !== null) {
+      const team = (m[1] || "").toUpperCase();
+      const runs = parseInt(m[2], 10);
+      const wickets = parseInt(m[3], 10);
+      const overs = parseFloat(m[4]);
+
+      if (isValidScore(runs, wickets, overs)) {
+        candidates.push({
+          team,
+          runs,
+          wickets,
+          overs,
+          raw: m[0]
+        });
+      }
+    }
+
+    if (candidates.length === 0) return null;
+
+    const targetCodes = new Set(
+      [t1, t2]
+        .concat(t1A)
+        .concat(t2A)
+        .map(x => normalize(x))
+        .filter(Boolean)
+    );
+
+    const preferred = candidates.find(c => {
+      const teamN = normalize(c.team);
+      return targetCodes.has(teamN) || targetCodes.has(teamN.toLowerCase());
+    });
+
+    return preferred || candidates[0];
+  }
+
+  function extractBatterRows(rows) {
+    const batters = [];
+    const batterRe = /([A-Z][a-zA-Z'.\-\s]{2,35}?)\s+(\d{1,3})\s*\(\s*(\d{1,3})\s*\)/;
+
+    for (const row of rows) {
+      const low = row.toLowerCase();
+
+      if (
+        low.includes('partnership') ||
+        low.includes('extras') ||
+        low.includes('yet to bat') ||
+        low.includes('last wicket') ||
+        low.includes('bowler') ||
+        low.includes('crr') ||
+        low.includes('rrr') ||
+        low.includes('score') ||
+        low.includes('innings')
+      ) continue;
+
+      const m = row.match(batterRe);
+      if (!m) continue;
+
+      const name = m[1]
+        .replace(/\b(batter|batsman|striker)\b/ig, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      if (name.length < 3) continue;
+
+      batters.push({
+        text: `${name} ${m[2]}(${m[3]})`,
+        striker: row.includes('*BAT*') || row.includes('🏏') || row.includes('*')
+      });
+    }
+
+    return dedupeSimilarStrings(
+      batters.map(b => JSON.stringify(b))
+    ).map(s => JSON.parse(s));
+  }
+
+  function extractBowler(rows, text) {
+    const patterns = [
+      /bowler\s*[:\-]?\s*([A-Z][a-zA-Z'.\-\s]{2,35}?)(?:\s+\d|\s*$)/i,
+      /([A-Z][a-zA-Z'.\-\s]{2,35}?)\s+\d+\-\d+\-\d+\-\d+/,
+      /([A-Z][a-zA-Z'.\-\s]{2,35}?)\s+\d+\.\d+\s+\d+\s+\d+/,
+      /([A-Z][a-zA-Z'.\-\s]{2,35}?)\s+\d+\.\d+\s+\d+/
+    ];
+
+    for (const row of rows) {
+      const low = row.toLowerCase();
+      if (
+        low.includes('batter') ||
+        low.includes('batsman') ||
+        low.includes('partnership') ||
+        low.includes('extras') ||
+        low.includes('yet to bat')
+      ) continue;
+
+      for (const p of patterns) {
+        const m = row.match(p);
+        if (m && m[1]) {
+          const nm = m[1]
+            .replace(/\b(bowler|overs|econ|runs|wickets|spell|imp)\b/ig, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+          if (
+            nm.length > 2 &&
+            !normalize(nm).includes('josh inglis') &&
+            !normalize(nm).includes('choudhary')
+          ) {
+            return nm;
+          }
+        }
+      }
+    }
+
+    const extra = text.match(/bowler\s*[:\-]?\s*([A-Z][a-zA-Z'.\-\s]{2,35}?)(?:\s+\d|\s*$)/i);
+    if (extra && extra[1]) {
+      return extra[1].replace(/\s+/g, ' ').trim();
+    }
+
+    return "NO BOWLER";
+  }
+
+  function extractToss(text) {
+    const tossPatterns = [
+      /([A-Za-z\s'.\-]+won the toss and elected to [A-Za-z]+)/i,
+      /([A-Za-z\s'.\-]+won the toss and chose to [A-Za-z]+)/i,
+      /([A-Za-z\s'.\-]+opted to [A-Za-z]+)/i,
+      /toss\s*[:\-]\s*([A-Za-z\s'.\-]+)/i
+    ];
+
+    for (const tp of tossPatterns) {
+      const m = text.match(tp);
+      if (m && m[1]) return m[1].replace(/\s+/g, ' ').trim();
+    }
+    return "NO TOSS DATA";
+  }
+
+  function extractVenue(text) {
+    const venueMatch = text.match(/Venue\s*:?\s*([A-Za-z\s,.'\-()]+)/i);
+    if (venueMatch && venueMatch[1]) {
+      return venueMatch[1].replace(/\s+/g, ' ').trim();
+    }
+    return "";
+  }
+
+  function extractCurrentRR(text) {
+    const crrMatch = text.match(/CRR\s*:?\s*(\d+(?:\.\d+)?)/i);
+    return crrMatch ? crrMatch[1] : "NO CRR";
+  }
+
+  function extractRequiredRR(text) {
+    const reqMatch = text.match(/(?:RRR|REQ|Required RR)\s*:?\s*(\d+(?:\.\d+)?)/i);
+    return reqMatch ? reqMatch[1] : "1st Innings";
+  }
+
+  function extractLastOver(text) {
+    const recentMatch = text.match(/Recent\s*[:\-]?\s*([0-6WNbwd\s|]+)/i);
+    if (recentMatch && recentMatch[1]) {
+      const arr = recentMatch[1]
+        .replace(/\|/g, ' ')
+        .split(/\s+/)
+        .map(x => x.trim())
+        .filter(Boolean)
+        .slice(-6);
+      if (arr.length > 0) return arr;
+    }
+
+    const overBlock = text.match(/Over\s+\d+\s+([0-6WNbwd\s]+)/i);
+    if (overBlock && overBlock[1]) {
+      const arr = overBlock[1]
+        .split(/\s+/)
+        .map(x => x.trim())
+        .filter(Boolean)
+        .slice(-6);
+      if (arr.length > 0) return arr;
+    }
+
+    return ["-", "-", "-", "-", "-", "-"];
+  }
+
+  function extractOdds(text) {
+    const oddsText = normalize(text);
+    for (const [code, aliases] of Object.entries(teamAliases)) {
+      for (const alias of aliases) {
+        const re = new RegExp(
+          `\\b${escapeRegExp(alias)}\\b[^\\d]{0,25}(\\d{1,3})[^\\d]{1,6}(\\d{1,3})`,
+          'i'
+        );
+
+        const m = oddsText.match(re);
+        if (!m) continue;
+
+        const p1 = parseInt(m[1], 10);
+        const p2 = parseInt(m[2], 10);
+
+        if (
+          Number.isFinite(p1) &&
+          Number.isFinite(p2) &&
+          p1 > 0 &&
+          p2 > 0 &&
+          p1 < 150 &&
+          p2 < 150 &&
+          Math.abs(p1 - p2) <= 5
+        ) {
+          const back = Math.min(p1, p2);
+          const lay = Math.max(p1, p2);
+          return {
+            team: code.toUpperCase(),
+            back,
+            lay
+          };
+        }
+      }
+    }
+    return null;
+  }
+
+  // ==============================================================================
+  // MAIN
+  // ==============================================================================
   try {
 
-    let timestampBuster = Date.now();
-
-    let rawHtmlData = "";
-    let cleanText = "";
-    let pageTitle = "";
-
+    const timestampBuster = Date.now();
     let htmlAcquired = false;
+    let rawHtmlData = "";
+    let pageTitle = "";
+    let domRows = [];
 
     // ==============================================================================
-    // FIND CREX URL
+    // CREX URL RESOLUTION
     // ==============================================================================
     let crexUrl = "";
 
-    try {
+    if (targetUrl.includes('crex.com') || targetUrl.includes('crex.live')) {
+      crexUrl = targetUrl;
+    }
 
-      if (targetUrl.includes('crex')) {
-        crexUrl = targetUrl;
-      }
-
-      if (!crexUrl) {
-
+    if (!crexUrl && targetTeams) {
+      try {
         const fixtureRes = await axios.get(
           `https://crex.live/fixtures/match-list?_t=${timestampBuster}`,
           { headers, timeout: 8000 }
         );
 
-        const $$ = cheerio.load(fixtureRes.data);
-
-        $$('a').each((i, el) => {
-
-          let href = $$(el).attr('href') || "";
-          let txt = ($$(el).text() + " " + href).toLowerCase();
+        const $temp = cheerio.load(fixtureRes.data);
+        $temp('a').each((i, el) => {
+          const href = $temp(el).attr('href') || "";
+          const txt = (($temp(el).text() || "") + " " + href).toLowerCase();
 
           if (
             matchesTeams(txt) &&
             (
               href.includes('scoreboard') ||
               href.includes('match') ||
-              href.includes('score')
+              href.includes('score') ||
+              href.includes('live')
             )
           ) {
-
-            if (href.startsWith('http')) {
-              crexUrl = href;
-            } else {
-              crexUrl = "https://crex.live" + href;
-            }
+            crexUrl = href.startsWith('http') ? href : 'https://crex.live' + href;
           }
         });
-      }
-
-    } catch (e) {}
-
-    // ==============================================================================
-    // FETCH PAGE
-    // ==============================================================================
-    if (crexUrl) {
-
-      try {
-
-        const response = await axios.get(
-          crexUrl + "?_t=" + timestampBuster,
-          {
-            headers,
-            timeout: 10000
-          }
-        );
-
-        const html = response.data;
-
-        const $ = cheerio.load(html);
-
-        pageTitle = $('title').text() || "";
-
-        rawHtmlData = html;
-
-        // ==========================================================================
-        // NEXTJS HYDRATION EXTRACTION
-        // ==========================================================================
-        let embeddedJson = "";
-
-        let nextDataMatch = rawHtmlData.match(
-          /<script id="__NEXT_DATA__" type="application\/json">(.*?)<\/script>/s
-        );
-
-        if (nextDataMatch && nextDataMatch[1]) {
-          embeddedJson += " " + nextDataMatch[1];
-        }
-
-        let apolloMatch = rawHtmlData.match(
-          /window\.__APOLLO_STATE__\s*=\s*(\{.*?\});/s
-        );
-
-        if (apolloMatch && apolloMatch[1]) {
-          embeddedJson += " " + apolloMatch[1];
-        }
-
-        embeddedJson += " " + $('body').text();
-
-        rawHtmlData = embeddedJson
-          .replace(/\\u002F/g, '/')
-          .replace(/\\u0026/g, '&')
-          .replace(/\\"/g, '"')
-          .replace(/\\n/g, ' ')
-          .replace(/\\t/g, ' ');
-
-        htmlAcquired = true;
-
-        payload.fetch_code = "UREKHA";
-        payload.source_url = "CREX (Tier 1 Speed)";
-
       } catch (e) {}
     }
 
-    // ==============================================================================
-    // FAIL
-    // ==============================================================================
-    if (!htmlAcquired) {
-
+    if (!crexUrl) {
       payload.status = "MATCH LINK NOT FOUND";
-
       return res.status(200).json({
         success: false,
         match_info: payload
@@ -239,391 +433,278 @@ module.exports = async function (req, res) {
     }
 
     // ==============================================================================
-    // CLEAN TEXT
+    // FETCH MATCH PAGE
     // ==============================================================================
-    cleanText = rawHtmlData
+    try {
+      const response = await axios.get(
+        `${crexUrl}?_t=${timestampBuster}`,
+        { headers, timeout: 10000 }
+      );
+
+      const html = response.data;
+      const $ = cheerio.load(html);
+
+      pageTitle = $('title').text() || "";
+
+      rawHtmlData = html;
+
+      let embeddedJson = "";
+
+      const nextDataMatch = rawHtmlData.match(
+        /<script id="__NEXT_DATA__" type="application\/json">(.*?)<\/script>/s
+      );
+      if (nextDataMatch && nextDataMatch[1]) {
+        embeddedJson += " " + nextDataMatch[1];
+      }
+
+      const apolloMatch = rawHtmlData.match(
+        /window\.__APOLLO_STATE__\s*=\s*(\{.*?\});/s
+      );
+      if (apolloMatch && apolloMatch[1]) {
+        embeddedJson += " " + apolloMatch[1];
+      }
+
+      const reduxMatch = rawHtmlData.match(
+        /window\.__INITIAL_STATE__\s*=\s*(\{.*?\});/s
+      );
+      if (reduxMatch && reduxMatch[1]) {
+        embeddedJson += " " + reduxMatch[1];
+      }
+
+      embeddedJson += " " + $('body').text();
+
+      rawHtmlData = embeddedJson
+        .replace(/\\u002F/g, '/')
+        .replace(/\\u0026/g, '&')
+        .replace(/\\"/g, '"')
+        .replace(/\\n/g, ' ')
+        .replace(/\\t/g, ' ')
+        .replace(/\s+/g, ' ');
+
+      htmlAcquired = true;
+      payload.fetch_code = "UREKHA";
+      payload.source_url = "CREX (Tier 1 Speed)";
+    } catch (e) {}
+
+    if (!htmlAcquired) {
+      payload.status = "UPLINK FAILED";
+      return res.status(200).json({
+        success: false,
+        match_info: payload
+      });
+    }
+
+    // ==============================================================================
+    // ROW ISOLATION
+    // ==============================================================================
+    const bodyForRows = rawHtmlData
+      .replace(/<svg[^>]*>.*?<\/svg>/gi, ' *BAT* ')
+      .replace(/class="[^"]*active[^"]*"/gi, ' *BAT* ')
+      .replace(/<\/?(div|tr|p|li|table|tbody|span|section|article|header|footer)[^>]*>/gi, ' |ROW| ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&');
+
+    cleanText = bodyForRows
       .replace(/<[^>]+>/g, ' ')
       .replace(/[{}[\]",]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
 
+    domRows = cleanText
+      .split('|ROW|')
+      .map(r => r.replace(/\s+/g, ' ').trim())
+      .filter(Boolean);
+
+    const combinedText = (pageTitle + " " + cleanText).replace(/\s+/g, ' ').trim();
+
     // ==============================================================================
     // TITLE
     // ==============================================================================
-    let titleMatch =
-      cleanText.match(/([A-Za-z\s]+vs[A-Za-z\s]+)/i);
+    const titleMatch =
+      combinedText.match(/([A-Za-z][A-Za-z\s.']+?\s+(?:vs|v)\s+[A-Za-z][A-Za-z\s.']+)/i);
 
-    if (titleMatch) {
+    if (titleMatch && titleMatch[1]) {
       payload.title = titleMatch[1]
         .replace(/\s+/g, ' ')
         .trim()
         .toUpperCase();
-    } else {
+    } else if (targetTeams) {
       payload.title = targetTeams.toUpperCase();
     }
 
     // ==============================================================================
     // SCORE
     // ==============================================================================
-    let scoreRegex =
-      /([A-Z]{2,4})\s*(\d+)\/(\d+)\s*\(?(\d+\.\d+)\)?|([A-Z]{2,4})\s*(\d+)-(\d+)\s*\(?(\d+\.\d+)\)?/i;
+    let scoreObj = extractScoreFromText(combinedText);
 
-    let scoreMatch = cleanText.match(scoreRegex);
+    if (!scoreObj) {
+      // try row-by-row, prioritizing rows that contain team names / score words
+      for (const row of domRows) {
+        const rowScore = extractScoreFromText(row);
+        if (rowScore) {
+          scoreObj = rowScore;
+          break;
+        }
+      }
+    }
 
-    if (scoreMatch) {
-
-      let tm =
-        scoreMatch[1] || scoreMatch[5];
-
-      let rs =
-        scoreMatch[2] || scoreMatch[6];
-
-      let wk =
-        scoreMatch[3] || scoreMatch[7];
-
-      let ov =
-        scoreMatch[4] || scoreMatch[8];
-
-      payload.live_score =
-        `${tm} ${rs}/${wk} (${ov})`;
-
+    if (scoreObj) {
+      payload.live_score = `${scoreObj.team} ${scoreObj.runs}/${scoreObj.wickets} (${scoreObj.overs})`;
       payload.match_state = "live";
     }
 
     // ==============================================================================
     // STATUS
     // ==============================================================================
-    let statusPatterns = [
+    const lowerCombined = normalize(combinedText);
+    if (/won by|tied|abandoned/.test(lowerCombined)) {
+      payload.match_state = "completed";
+    }
 
-      /([A-Za-z\s]+won by\s+\d+\s+(runs|wickets))/i,
-
-      /(need\s+\d+\s+runs?.*?\d+\s+balls?)/i,
-
-      /(innings break)/i,
-
-      /(strategic timeout)/i,
-
-      /(live)/i
-    ];
-
-    for (let p of statusPatterns) {
-
-      let sm = cleanText.match(p);
-
-      if (sm && sm[1]) {
-        payload.status = sm[1];
-        break;
+    if (payload.match_state === "live") {
+      if (payload.status === "Scanning Fields..." || normalize(payload.status) === "live") {
+        payload.status = "Live Match Active";
       }
-    }
-
-    if (
-      payload.status === "Scanning Fields..." &&
-      payload.match_state === "live"
-    ) {
-      payload.status = "Live Match Active";
-    }
-
-    // ==============================================================================
-    // TOSS
-    // ==============================================================================
-    let tossPatterns = [
-
-      /([A-Za-z\s]+won the toss and elected to [A-Za-z]+)/i,
-
-      /([A-Za-z\s]+won the toss and chose to [A-Za-z]+)/i,
-
-      /([A-Za-z\s]+opted to [A-Za-z]+)/i,
-
-      /toss\s*:\s*([A-Za-z\s]+)/i
-    ];
-
-    for (let tp of tossPatterns) {
-
-      let tm = cleanText.match(tp);
-
-      if (tm && tm[1]) {
-
-        payload.toss = tm[1]
-          .replace(/\s+/g, ' ')
-          .trim();
-
-        break;
-      }
-    }
-
-    // ==============================================================================
-    // VENUE
-    // ==============================================================================
-    let venueMatch =
-      cleanText.match(/Venue\s*:?\s*([A-Za-z\s,]+)/i);
-
-    if (venueMatch) {
-
-      payload.venue =
-        venueMatch[1].trim();
-
+    } else if (payload.match_state === "completed") {
+      const winTxt = combinedText.match(/([A-Za-z\s'.\-]+won by\s+\d+\s+(runs|wickets))/i);
+      payload.status = winTxt ? winTxt[1].trim() : "Match Completed";
     } else {
-
-      let homeCode = t1A[0];
-
-      if (homeVenues[homeCode]) {
-        payload.venue = homeVenues[homeCode];
-      }
+      payload.status = "Scanning Fields...";
     }
 
     // ==============================================================================
-    // CRR / RRR
+    // TOSS / VENUE / RR
     // ==============================================================================
-    let crrMatch =
-      cleanText.match(/CRR\s*:?\s*(\d+\.\d+)/i);
+    const toss = extractToss(combinedText);
+    if (toss !== "NO TOSS DATA") payload.toss = toss;
 
-    if (crrMatch) {
-      payload.current_rr = crrMatch[1];
-    }
-
-    let reqMatch =
-      cleanText.match(/(RRR|REQ)\s*:?\s*(\d+\.\d+)/i);
-
-    if (reqMatch) {
-      payload.required_rr = reqMatch[2];
+    const venue = extractVenue(combinedText);
+    if (venue) {
+      payload.venue = venue;
     } else {
-      payload.required_rr = "1st Innings";
+      const homeCode = t1A[0];
+      if (homeVenues[homeCode]) payload.venue = homeVenues[homeCode];
     }
+
+    payload.current_rr = extractCurrentRR(combinedText);
+    payload.required_rr = extractRequiredRR(combinedText);
 
     // ==============================================================================
     // BATTERS
     // ==============================================================================
-    let batterRegex =
-      /([A-Z][a-z]+(?:\s[A-Z][a-z]+){0,2})\s+(\d+)\s*\((\d+)\)/g;
-
-    let batters = [];
-    let bm;
-
-    while ((bm = batterRegex.exec(cleanText)) !== null) {
-
-      let nm = bm[1].trim();
-
-      if (
-        nm.length > 2 &&
-        !nm.toLowerCase().includes('total') &&
-        !nm.toLowerCase().includes('extras') &&
-        !nm.toLowerCase().includes('partnership')
-      ) {
-
-        batters.push(
-          `${nm} ${bm[2]}(${bm[3]})`
-        );
-      }
-    }
-
-    let uniqueBatters = [];
-
-    batters.forEach(b => {
-
-      let exists = uniqueBatters.find(x => {
-
-        let a = x.toLowerCase();
-        let c = b.toLowerCase();
-
-        return (
-          a.includes(c) ||
-          c.includes(a)
-        );
-      });
-
-      if (!exists) {
-        uniqueBatters.push(b);
-      }
-    });
-
-    batters = uniqueBatters;
+    const batters = extractBatterRows(domRows);
 
     if (batters[0]) {
-      payload.batter_1 = batters[0] + " 🏏";
+      payload.batter_1 = batters[0].text + (batters[0].striker ? " 🏏" : "");
     }
 
     if (batters[1]) {
-      payload.batter_2 = batters[1];
+      payload.batter_2 = batters[1].text + (batters[1].striker ? " 🏏" : "");
+    }
+
+    // Fail-safe if one row was duplicated or first batter not tagged
+    if (payload.batter_1 === payload.batter_2 && payload.batter_1 !== "NO BATTER 1") {
+      payload.batter_2 = "NO BATTER 2";
     }
 
     // ==============================================================================
     // BOWLER
     // ==============================================================================
-    let bowlerPatterns = [
-
-      /bowler\s*([A-Z][a-z]+\s?[A-Z]?[a-z]*)/i,
-
-      /([A-Z][a-z]+\s?[A-Z]?[a-z]*)\s+\d+\-\d+\-\d+\-\d+/,
-
-      /([A-Z][a-z]+\s?[A-Z]?[a-z]*)\s+\d+\.\d+\s+\d+\s+\d+/,
-
-      /([A-Z][a-z]+\s?[A-Z]?[a-z]*)\s+\d+\.\d+\s+\d+/
-    ];
-
-    for (let p of bowlerPatterns) {
-
-      let bm = cleanText.match(p);
-
-      if (bm && bm[1]) {
-
-        let nm = bm[1]
-          .replace(/bowler/i, '')
-          .trim();
-
-        if (
-          nm.length > 2 &&
-          !nm.toLowerCase().includes('josh inglis')
-        ) {
-
-          payload.bowler = nm;
-          break;
-        }
-      }
+    const bowler = extractBowler(domRows, combinedText);
+    if (bowler && bowler !== "NO BOWLER") {
+      payload.bowler = bowler;
     }
 
     // ==============================================================================
     // LAST OVER
     // ==============================================================================
-    let recentMatch =
-      cleanText.match(/Recent\s*:?\s*([0-6WNbwd\s]+)/i);
-
-    if (recentMatch) {
-
-      payload.last_over =
-        recentMatch[1]
-          .trim()
-          .split(/\s+/)
-          .slice(-6);
-    }
+    payload.last_over = extractLastOver(combinedText);
 
     // ==============================================================================
     // TRUE ODDS
     // ==============================================================================
-    let oddsFound = false;
+    const odds = extractOdds(combinedText);
 
-    for (const [code, aliases] of Object.entries(teamAliases)) {
-
-      if (oddsFound) break;
-
-      for (const alias of aliases) {
-
-        let re = new RegExp(
-          `\\b${escapeRegExp(alias)}\\b[^\\d]{0,25}(\\d{1,3})[^\\d]{1,5}(\\d{1,3})`,
-          'i'
-        );
-
-        let mo = cleanText.match(re);
-
-        if (mo) {
-
-          let p1 = parseInt(mo[1]);
-          let p2 = parseInt(mo[2]);
-
-          if (
-            Math.abs(p1 - p2) <= 4 &&
-            p1 > 0 &&
-            p2 > 0 &&
-            p1 < 100 &&
-            p2 < 100
-          ) {
-
-            let fav = code.toUpperCase();
-
-            let back = Math.min(p1, p2);
-            let lay = Math.max(p1, p2);
-
-            payload.match_prediction =
-              `[LIVE MARKET ODDS] ${fav} is Favorite at ${back}-${lay} Paise`;
-
-            oddsFound = true;
-            break;
-          }
-        }
-      }
-    }
-
-    if (!oddsFound) {
+    if (odds) {
       payload.match_prediction =
-        "[TRUE ODDS] WAITING FOR LIVE DATA";
+        `[LIVE MARKET ODDS] ${odds.team} is Favorite at ${odds.back}-${odds.lay} Paise\n` +
+        `Win Probability: ${(100 / (100 + odds.back) * 100).toFixed(0)}%|` +
+        `[ANALYSIS] ${odds.team} is controlling the live market.|` +
+        `[DIRECTIVE] 🟢 PLAY (BACK) ${odds.team} at ${odds.back}p or EAT at ${odds.lay}p`;
+    } else {
+      payload.match_prediction = "[TRUE ODDS] WAITING FOR LIVE DATA";
     }
 
     // ==============================================================================
     // AI ENGINE
     // ==============================================================================
-    if (
-      payload.live_score !== "NO SCORE" &&
-      payload.live_score !== "Match Not Started"
-    ) {
+    if (payload.match_state === "live" && payload.live_score.includes('/')) {
+      const sm = payload.live_score.match(/([A-Z]{2,4})\s(\d+)\/(\d+)\s\(([\d\.]+)\)/);
 
-      let s =
-        payload.live_score.match(/(\d+)\/(\d+)\s*\(([\d\.]+)\)/);
+      if (sm) {
+        const batTeam = sm[1];
+        const runs = parseInt(sm[2], 10);
+        const wkts = parseInt(sm[3], 10);
+        const overs = parseFloat(sm[4]);
 
-      if (s) {
-
-        let runs = parseInt(s[1]);
-        let wkts = parseInt(s[2]);
-        let overs = parseFloat(s[3]);
-
+        const crr = parseFloat(payload.current_rr);
         let projected = 180;
 
-        if (overs > 0) {
-          projected =
-            Math.floor((runs / overs) * 20);
+        if (Number.isFinite(crr) && overs > 0) {
+          projected = Math.floor((runs / overs) * 20);
         }
 
         let tactic = "🟡 HOLD - BALANCED";
+        if (projected >= 210) tactic = "🟢 PLAY (BACK) - HIGH AGGRESSION";
+        else if (projected <= 160) tactic = "🔴 EAT (LAY) - WEAK TOTAL";
 
-        if (projected >= 210) {
-          tactic = "🟢 PLAY (BACK) - HIGH AGGRESSION";
+        payload.prediction = `TARGETS: [20v: ${projected}] \nTACTIC: ${tactic}`;
+
+        // If live score is very strong/weak, slightly refine output text without changing logic
+        if (wkts >= 7) {
+          payload.prediction = `TARGETS: [20v: ${projected}] \nTACTIC: 🔴 EAT (LAY) - COLLAPSING PATTERN`;
         }
 
-        if (projected <= 160) {
-          tactic = "🔴 EAT (LAY) - WEAK TOTAL";
+        if (payload.match_prediction === "[TRUE ODDS] WAITING FOR LIVE DATA") {
+          payload.match_prediction =
+            `[TRUE ODDS] ${batTeam} is active at live pace|[ANALYSIS] Awaiting CREX odds telemetry.|[DIRECTIVE] 🟡 HOLD`;
         }
-
-        payload.prediction =
-          `TARGETS: [20v: ${projected}] \nTACTIC: ${tactic}`;
       }
-
+    } else if (payload.match_state === "completed") {
+      payload.prediction = "ORACLE OFFLINE";
     } else {
-
       payload.prediction = "ORACLE OFFLINE";
     }
 
     // ==============================================================================
-    // MATCH STATE FINAL FIX
+    // FINAL MATCH-STATE SAFETY
     // ==============================================================================
     if (
       payload.live_score === "NO SCORE" ||
       payload.live_score === "Match Not Started"
     ) {
-
       payload.match_state = "future";
       payload.live_score = "Match Not Started";
-
       payload.prediction = "ORACLE OFFLINE";
 
       if (!payload.match_prediction) {
-
-        payload.match_prediction =
-          "[TRUE ODDS] WAITING FOR LIVE DATA";
+        payload.match_prediction = "[TRUE ODDS] WAITING FOR LIVE DATA";
       }
-
-    } else {
-
+    } else if (payload.match_state !== "completed") {
       payload.match_state = "live";
     }
 
-    // ==============================================================================
-    // FINAL
-    // ==============================================================================
+    // Normalize status if it is just lowercase "live"
+    if (normalize(payload.status) === "live") {
+      payload.status = "Live Match Active";
+    }
+
     return res.status(200).json({
       success: true,
       match_info: payload
     });
 
   } catch (err) {
-
     payload.status = "FIREWALL BLOCKED CONNECTION";
     payload.live_score = "ERROR: Cannot Fetch";
     payload.prediction = "SCRAPER OFFLINE";
