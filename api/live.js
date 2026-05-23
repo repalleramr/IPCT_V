@@ -26,7 +26,7 @@ module.exports = async function (req, res) {
   let payload = {
         title: "TARGET UNKNOWN", status: "Scanning Fields...", match_state: "standby", winner: "PENDING",
         live_score: "NO SCORE", current_rr: "NO CRR", required_rr: "NO REQ",
-        striker: "NO STRIKER", non_striker: "NO NON-STRIKER", bowler: "NO BOWLER",
+        batter_1: "NO BATTER 1", batter_2: "NO BATTER 2", bowler: "NO BOWLER",
         toss: "NO TOSS DATA", venue: "VENUE HIDDEN", last_over: ["-", "-", "-", "-", "-", "-"],
         prediction: "AI OFFLINE", match_prediction: "", source_url: "Hunting...", fetch_code: "OH"
   };
@@ -66,47 +66,6 @@ module.exports = async function (req, res) {
 
   function escapeRegExp(str) { return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
-  function extractCrexTrueOdds(text) {
-    if (!text || typeof text !== "string") return null;
-    const flat = text.replace(/\s+/g, " ").replace(/[()\[\]]/g, " ");
-    const teamMap = {
-      "csk": ["csk", "chennai super kings", "chennai", "super kings"],
-      "lsg": ["lsg", "lucknow super giants", "lucknow", "super giants"],
-      "mi": ["mi", "mumbai indians", "mumbai", "indians"],
-      "pbks": ["pbks", "punjab kings", "punjab", "kings"],
-      "dc": ["dc", "delhi capitals", "delhi", "capitals"],
-      "gt": ["gt", "gujarat titans", "gujarat", "titans"],
-      "kkr": ["kkr", "kolkata knight riders", "kolkata", "knight riders"],
-      "rr": ["rr", "rajasthan royals", "rajasthan", "royals"],
-      "rcb": ["rcb", "royal challengers bengaluru", "royal challengers bangalore", "royal", "bengaluru", "bangalore", "challengers"],
-      "srh": ["srh", "sunrisers hyderabad", "sunrisers", "hyderabad"]
-    };
-
-    for (const code of Object.keys(teamMap)) {
-      const re = new RegExp(`\\b${code.toUpperCase()}\\b[^0-9]{0,40}(\\d{1,3})[\\s\\-]+(\\d{1,3})\\b`, "i");
-      const m = flat.match(re);
-      if (m) {
-        const a = parseInt(m[1], 10); const b = parseInt(m[2], 10);
-        if (a > 0 && b > 0 && a <= 150 && b <= 150 && Math.abs(a - b) <= 4) {
-          return { team: code.toUpperCase(), back: Math.min(a, b), lay: Math.max(a, b), raw: m[0] };
-        }
-      }
-    }
-    for (const [code, aliases] of Object.entries(teamMap)) {
-      for (const alias of aliases) {
-        const re = new RegExp(`\\b${escapeRegExp(alias)}\\b[^0-9]{0,40}(\\d{1,3})[\\s\\-]+(\\d{1,3})\\b`, "i");
-        const m = flat.match(re);
-        if (m) {
-          const a = parseInt(m[1], 10); const b = parseInt(m[2], 10);
-          if (a > 0 && b > 0 && a <= 150 && b <= 150 && Math.abs(a - b) <= 4) {
-            return { team: code.toUpperCase(), back: Math.min(a, b), lay: Math.max(a, b), raw: m[0] };
-          }
-        }
-      }
-    }
-    return null;
-  }
-
   let t1 = targetTeams.split(' vs ')[0]?.trim().split(' ')[0] || "unknown";
   let t2 = targetTeams.split(' vs ')[1]?.trim().split(' ')[0] || "unknown";
   const t1A = teamAliases[t1] || [t1]; const t2A = teamAliases[t2] || [t2];
@@ -136,7 +95,12 @@ module.exports = async function (req, res) {
                   let fetchUrl = crexUrl.includes('?') ? `${crexUrl}&_t=${timestampBuster}` : `${crexUrl}?_t=${timestampBuster}`;
                   const cRes = await axios.get(fetchUrl, { headers, timeout: 3000 });
                   $ = cheerio.load(cRes.data); 
+                  
+                  // STRICT ARTIFACT INJECTION
+                  $('img[src*="bat" i], img[alt*="bat" i], svg').replaceWith(' [STRIKER] ');
+                  $('.cb-font-bold').append(' [STRIKER] ');
                   $('script, style, noscript').remove();
+
                   pageTitle = $('title').text() || ""; 
                   bodyText = $('body').text().replace(/\s+/g, ' ').trim();
                   payload.source_url = "CREX (Tier 1 Speed)"; htmlAcquired = true;
@@ -164,7 +128,10 @@ module.exports = async function (req, res) {
                   let fetchUrl = cbUrl.includes('?') ? `${cbUrl}&_t=${timestampBuster}` : `${cbUrl}?_t=${timestampBuster}`;
                   const cbRes = await axios.get(fetchUrl, { headers, timeout: 3500 });
                   $ = cheerio.load(cbRes.data); 
+                  
+                  $('.cb-font-bold').append(' [STRIKER] ');
                   $('script, style, noscript').remove();
+                  
                   pageTitle = $('title').text() || ""; 
                   bodyText = $('body').text().replace(/\s+/g, ' ').trim();
                   payload.source_url = "CRICBUZZ (Tier 2 Failsafe)"; htmlAcquired = true;
@@ -238,12 +205,16 @@ module.exports = async function (req, res) {
           }
       } catch (e) { payload.match_state = "standby"; }
 
+      // ==========================================
+      // EXPANDED TOSS HUNTER
+      // ==========================================
       try {
           let tossResult = "";
           if ($) tossResult = $('.cb-toss-sts, .toss-result, .match-info-toss, .toss, .toss-text, .match-detail-toss').first().text().trim();
           if (!tossResult) {
               let tossMatch = bodyText.match(/([A-Za-z\s\.\-]+(?:won the toss|opt(?:ed|s)? to|elect(?:ed|s)? to|chose to|decided to)\s(?:bat|bowl|field)(?:\sfirst)?)/i);
-              if (!tossMatch) tossMatch = bodyText.match(/Toss\s*:\s*([^•|{\(\n]+)/i);
+              if (!tossMatch) tossMatch = bodyText.match(/(?:Toss|TOSS)[\s:-]+([A-Za-z\s]+(?:opt|elect|chose|won)[A-Za-z\s]+)/i);
+              if (!tossMatch) tossMatch = bodyText.match(/Toss\s*:\s*([^•|{\(]+)/i);
               if (tossMatch) tossResult = tossMatch[1].trim();
           }
           if (!tossResult && espnMatchData && espnMatchData.tossResults) tossResult = espnMatchData.tossResults.text;
@@ -289,41 +260,63 @@ module.exports = async function (req, res) {
           } catch(e) { payload.current_rr = "Error"; payload.required_rr = "Error"; }
 
           // ==========================================
-          // CREX ALIGNMENT: TOP IS ALWAYS STRIKER
+          // DIRECT CREX ALIGNMENT & INLINE STRIKE CAPTURE
           // ==========================================
           try {
               let batIdx = bodyText.search(/Batter|Batsman/i);
-              let searchArea = batIdx !== -1 ? bodyText.substring(batIdx, batIdx + 400) : bodyText;
-
-              // Brutal, pure extraction. No SVG hunting, no alphabetical sorting.
-              let batterRegex = /([A-Z][a-zA-Z\s\.\-']{2,25}?)\s*(?:\*|🏏|\[STRIKER\]|\[SVG\])?\s*(\d{1,3})\s*(?:\*|🏏|\[STRIKER\]|\[SVG\])?\s*\(\s*(\d{1,3})\s*\)/g;
+              let searchArea = batIdx !== -1 ? bodyText.substring(batIdx, batIdx + 600) : bodyText;
+              
+              // The Regex strictly extracts: Name, optional [STRIKER], Runs, Balls
+              let batterRegex = /([A-Z][a-zA-Z\s\.\-']{2,25}?)\s*(\[STRIKER\])?\s*(\d{1,3})\s*\(\s*(\d{1,3})\s*\)/gi;
               let matches = [...searchArea.matchAll(batterRegex)];
-              let validBatters = [];
+              let batters = [];
 
               matches.forEach(m => {
-                  let nameOnly = m[1].replace(/(Batter|Batsman|Total|Extras|Target)/gi, '').trim();
-                  let words = nameOnly.split(/\s+/).filter(w => w.length > 0);
-                  nameOnly = words.slice(-2).join(' ');
-                  if (nameOnly.length > 2) {
-                      validBatters.push(`${nameOnly} ${m[2]}(${m[3]})`);
+                  let rawName = m[1].replace(/[A-Z]{3,}/g, '').trim();
+                  let words = rawName.split(/\s+/).filter(w => !['Batter', 'Batsman', 'Total', 'Match', 'Recent', 'Overs'].includes(w));
+                  let name = words.slice(-2).join(' '); // Keep last two words
+                  
+                  if (name.length > 2) {
+                      let isStriker = m[2] ? true : false;
+                      batters.push({ name: name, runs: m[3], balls: m[4], isStriker: isStriker });
                   }
               });
 
-              if (validBatters.length > 0) {
-                  // The FIRST player extracted is physically on top. Therefore, they are the STRIKER.
-                  payload.striker = validBatters[0] + " 🏏"; 
-                  payload.non_striker = validBatters.length > 1 ? validBatters[1] : "Off-Strike";
+              if (batters.length > 0) {
+                  // Exactly preserve Crex's top-to-bottom HTML order
+                  let b1 = batters[0];
+                  payload.batter_1 = `${b1.name} ${b1.runs}(${b1.balls})` + (b1.isStriker ? " 🏏" : "");
+                  
+                  if (batters.length > 1) {
+                      let b2 = batters[1];
+                      payload.batter_2 = `${b2.name} ${b2.runs}(${b2.balls})` + (b2.isStriker ? " 🏏" : "");
+                  } else {
+                      payload.batter_2 = "Off-Strike";
+                  }
+
+                  // Absolute Failsafe: If neither got the tag, check the <title> tag for an asterisk
+                  if (!batters[0].isStriker && (!batters[1] || !batters[1].isStriker)) {
+                      let titleMatch = pageTitle.match(/\(([A-Za-z\s\.\-'\*]+?)\s*\d/);
+                      if (titleMatch && titleMatch[1].includes('*')) {
+                          payload.batter_1 = `${b1.name} ${b1.runs}(${b1.balls}) 🏏`;
+                          if (batters.length > 1) payload.batter_2 = `${batters[1].name} ${batters[1].runs}(${batters[1].balls})`;
+                      } else {
+                          // Default to top player if all artifacts fail
+                          payload.batter_1 = `${b1.name} ${b1.runs}(${b1.balls}) 🏏`;
+                          if (batters.length > 1) payload.batter_2 = `${batters[1].name} ${batters[1].runs}(${batters[1].balls})`;
+                      }
+                  }
               } else { 
-                  payload.striker = "Target Engaged"; payload.non_striker = "Off-Strike"; 
+                  payload.batter_1 = "Target Engaged"; payload.batter_2 = "Off-Strike"; 
               }
 
               if (payload.live_score && payload.live_score.includes('0/0 (0.0)')) { 
-                  payload.striker = "Awaiting Batters"; payload.non_striker = "Standby"; 
+                  payload.batter_1 = "Awaiting Batters"; payload.batter_2 = "Standby"; 
               }
-          } catch(e) { payload.striker = "Extractor Error"; payload.non_striker = "Extractor Error"; }
+          } catch(e) { payload.batter_1 = "Extractor Error"; payload.batter_2 = "Extractor Error"; }
 
           // ==========================================
-          // BOWLER MILESTONE FILTER FIX
+          // STRICT BOWLER CLEANER (Fixes "Milestone")
           // ==========================================
           try {
               let bowIdx = bodyText.search(/Bowler/i);
@@ -331,10 +324,10 @@ module.exports = async function (req, res) {
               let bowMatch = bowArea.match(/([A-Z][a-zA-Z\s\.\-']{2,25}?)\s+(\d{1,2}\s*\-\s*\d{1,3}|\d{1,2}\s*\.\s*\d{1,2}\s+\d)/);
               
               if (bowMatch && bowMatch[1]) {
-                  // Stripping out specific Crex alert artifacts like "Milestone", "Partnership", "Review"
-                  let name = bowMatch[1].replace(/(Econ|ECO|Overs|Runs|Wickets|Bowler|IMP|STRIKER|SVG|\[|\]|Milestone|Partnership|Timeout|Review)/gi, '').replace(/[A-Z]{3,}/g, '').trim();
-                  let words = name.replace(/\s+/g, ' ').trim().split(' ');
-                  payload.bowler = words.slice(-2).join(' ');
+                  // Strips out exact words that Crex injects around the bowler area
+                  let name = bowMatch[1].replace(/(Econ|ECO|Overs|Runs|Wickets|Bowler|IMP|STRIKER|SVG|\[|\]|Milestone|Partnership|Recent|Match)/gi, '').replace(/[A-Z]{3,}/g, '').trim();
+                  let words = name.split(/\s+/).filter(w => w.length > 0);
+                  payload.bowler = words.slice(-2).join(' ') || "Active Bowler";
               } else { payload.bowler = "Active Bowler"; }
 
               if (payload.live_score && payload.live_score.includes('0/0 (0.0)')) payload.bowler = "Awaiting Bowler";
@@ -457,7 +450,7 @@ module.exports = async function (req, res) {
                       let isRealMarket = false;
                       let displayOdds = `${favPaise}-${layPaise}`;
 
-                      const teamMap = {
+                      let teamMap = {
                           "chennai super kings": "CSK", "csk": "CSK", "chennai": "CSK",
                           "lucknow super giants": "LSG", "lsg": "LSG", "lucknow": "LSG",
                           "mumbai indians": "MI", "mi": "MI", "mumbai": "MI",
@@ -470,26 +463,17 @@ module.exports = async function (req, res) {
                           "sunrisers hyderabad": "SRH", "srh": "SRH", "hyderabad": "SRH"
                       };
 
-                      let crexOdds = null;
-                      if (payload.source_url && payload.source_url.toLowerCase().includes("crex")) {
-                          crexOdds = extractCrexTrueOdds(pageTitle) || extractCrexTrueOdds(bodyText);
-                      }
-
-                      if (crexOdds && crexOdds.team && crexOdds.back && crexOdds.lay) {
-                          favTeam = crexOdds.team; favPaise = crexOdds.back; layPaise = crexOdds.lay;
-                          displayOdds = `${favPaise}-${layPaise}`; maxProb = (100 / (100 + favPaise)) * 100; isRealMarket = true;
-                      } else {
-                          let teamsPattern = Object.keys(teamMap).join('|');
-                          let oddsRegex = new RegExp(`(${teamsPattern})[\\s\\W]*?(\\d{1,3})\\s+(\\d{1,3})\\b(?!\\s*[-/\\(\\)])`, 'i');
-                          let numViewMatch = bodyText.match(oddsRegex);
-                          if (numViewMatch && numViewMatch[1]) {
-                              let matchedTeam = numViewMatch[1].toLowerCase();
-                              let p1 = parseInt(numViewMatch[2]); let p2 = parseInt(numViewMatch[3]);
-                              if (Math.abs(p1 - p2) <= 3 && p1 > 0 && p2 < 100) {
-                                  favTeam = teamMap[matchedTeam] || matchedTeam.toUpperCase();
-                                  favPaise = p1; layPaise = p2; displayOdds = `${favPaise}-${layPaise}`;
-                                  maxProb = (100 / (100 + favPaise)) * 100; isRealMarket = true;
-                              }
+                      let teamsPattern = Object.keys(teamMap).join('|');
+                      let oddsRegex = new RegExp(`(${teamsPattern})[\\s\\W]*?(\\d{1,3})\\s+(\\d{1,3})\\b(?!\\s*[-/\\(\\)])`, 'i');
+                      let numViewMatch = bodyText.match(oddsRegex);
+                      
+                      if (numViewMatch && numViewMatch[1]) {
+                          let matchedTeam = numViewMatch[1].toLowerCase();
+                          let p1 = parseInt(numViewMatch[2]); let p2 = parseInt(numViewMatch[3]);
+                          if (Math.abs(p1 - p2) <= 3 && p1 > 0 && p2 < 100) {
+                              favTeam = teamMap[matchedTeam] || matchedTeam.toUpperCase();
+                              favPaise = p1; layPaise = p2; displayOdds = `${favPaise}-${layPaise}`;
+                              maxProb = (100 / (100 + favPaise)) * 100; isRealMarket = true;
                           }
                       }
 
@@ -501,7 +485,8 @@ module.exports = async function (req, res) {
                       }
 
                       let sRuns = 0, sBalls = 0, sSR = 0;
-                      let sMatch = payload.striker.match(/(\d+)\s*\(\s*(\d+)\s*\)/);
+                      let sMatch = payload.batter_1.match(/(\d+)\s*\(\s*(\d+)\s*\)/);
+                      if (!sMatch) sMatch = payload.batter_2.match(/(\d+)\s*\(\s*(\d+)\s*\)/);
                       if (sMatch) {
                           sRuns = parseInt(sMatch[1]); sBalls = parseInt(sMatch[2]);
                           if (sBalls > 0) sSR = (sRuns / sBalls) * 100;
