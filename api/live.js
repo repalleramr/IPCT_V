@@ -26,7 +26,7 @@ module.exports = async function (req, res) {
   let payload = {
         title: "TARGET UNKNOWN", status: "Scanning Fields...", match_state: "standby", winner: "PENDING",
         live_score: "NO SCORE", current_rr: "NO CRR", required_rr: "NO REQ",
-        batter_1: "NO BATTER 1", batter_2: "NO BATTER 2", bowler: "NO BOWLER",
+        striker: "NO STRIKER", non_striker: "NO NON-STRIKER", bowler: "NO BOWLER",
         toss: "NO TOSS DATA", venue: "VENUE HIDDEN", last_over: ["-", "-", "-", "-", "-", "-"],
         prediction: "AI OFFLINE", match_prediction: "", source_url: "Hunting...", fetch_code: "OH"
   };
@@ -92,6 +92,18 @@ module.exports = async function (req, res) {
         }
       }
     }
+    for (const [code, aliases] of Object.entries(teamMap)) {
+      for (const alias of aliases) {
+        const re = new RegExp(`\\b${escapeRegExp(alias)}\\b[^0-9]{0,40}(\\d{1,3})[\\s\\-]+(\\d{1,3})\\b`, "i");
+        const m = flat.match(re);
+        if (m) {
+          const a = parseInt(m[1], 10); const b = parseInt(m[2], 10);
+          if (a > 0 && b > 0 && a <= 150 && b <= 150 && Math.abs(a - b) <= 4) {
+            return { team: code.toUpperCase(), back: Math.min(a, b), lay: Math.max(a, b), raw: m[0] };
+          }
+        }
+      }
+    }
     return null;
   }
 
@@ -124,12 +136,7 @@ module.exports = async function (req, res) {
                   let fetchUrl = crexUrl.includes('?') ? `${crexUrl}&_t=${timestampBuster}` : `${crexUrl}?_t=${timestampBuster}`;
                   const cRes = await axios.get(fetchUrl, { headers, timeout: 3000 });
                   $ = cheerio.load(cRes.data); 
-                  
-                  $('img[src*="bat" i], img[alt*="bat" i]').replaceWith(' [STRIKER] ');
-                  $('svg').replaceWith(' [STRIKER] ');
-                  $('.cb-font-bold').append(' [STRIKER] ');
                   $('script, style, noscript').remove();
-
                   pageTitle = $('title').text() || ""; 
                   bodyText = $('body').text().replace(/\s+/g, ' ').trim();
                   payload.source_url = "CREX (Tier 1 Speed)"; htmlAcquired = true;
@@ -157,10 +164,7 @@ module.exports = async function (req, res) {
                   let fetchUrl = cbUrl.includes('?') ? `${cbUrl}&_t=${timestampBuster}` : `${cbUrl}?_t=${timestampBuster}`;
                   const cbRes = await axios.get(fetchUrl, { headers, timeout: 3500 });
                   $ = cheerio.load(cbRes.data); 
-                  
-                  $('.cb-font-bold').append(' [STRIKER] ');
                   $('script, style, noscript').remove();
-                  
                   pageTitle = $('title').text() || ""; 
                   bodyText = $('body').text().replace(/\s+/g, ' ').trim();
                   payload.source_url = "CRICBUZZ (Tier 2 Failsafe)"; htmlAcquired = true;
@@ -239,7 +243,7 @@ module.exports = async function (req, res) {
           if ($) tossResult = $('.cb-toss-sts, .toss-result, .match-info-toss, .toss, .toss-text, .match-detail-toss').first().text().trim();
           if (!tossResult) {
               let tossMatch = bodyText.match(/([A-Za-z\s\.\-]+(?:won the toss|opt(?:ed|s)? to|elect(?:ed|s)? to|chose to|decided to)\s(?:bat|bowl|field)(?:\sfirst)?)/i);
-              if (!tossMatch) tossMatch = bodyText.match(/Toss\s*:\s*([^•|{\(]+)/i);
+              if (!tossMatch) tossMatch = bodyText.match(/Toss\s*:\s*([^•|{\(\n]+)/i);
               if (tossMatch) tossResult = tossMatch[1].trim();
           }
           if (!tossResult && espnMatchData && espnMatchData.tossResults) tossResult = espnMatchData.tossResults.text;
@@ -285,90 +289,50 @@ module.exports = async function (req, res) {
           } catch(e) { payload.current_rr = "Error"; payload.required_rr = "Error"; }
 
           // ==========================================
-          // BATTER 1 / BATTER 2 STRIKE SHIFT ENGINE
+          // CREX ALIGNMENT: TOP IS ALWAYS STRIKER
           // ==========================================
           try {
+              let batIdx = bodyText.search(/Batter|Batsman/i);
+              let searchArea = batIdx !== -1 ? bodyText.substring(batIdx, batIdx + 400) : bodyText;
+
+              // Brutal, pure extraction. No SVG hunting, no alphabetical sorting.
+              let batterRegex = /([A-Z][a-zA-Z\s\.\-']{2,25}?)\s*(?:\*|🏏|\[STRIKER\]|\[SVG\])?\s*(\d{1,3})\s*(?:\*|🏏|\[STRIKER\]|\[SVG\])?\s*\(\s*(\d{1,3})\s*\)/g;
+              let matches = [...searchArea.matchAll(batterRegex)];
               let validBatters = [];
-              let titleBatterRegex = /\(([A-Za-z\s\.\-'\*]+?\s*\d{1,3}\s*\(\s*\d{1,3}\s*\))(?:\s*,\s*([A-Za-z\s\.\-'\*]+?\s*\d{1,3}\s*\(\s*\d{1,3}\s*\)))?\)/;
-              let titleMatch = pageTitle.match(titleBatterRegex);
-              
-              if (titleMatch && titleMatch[1]) {
-                  validBatters.push(titleMatch[1].trim());
-                  if (titleMatch[2]) validBatters.push(titleMatch[2].trim());
-              } else {
-                  let batIdx = bodyText.search(/Batter|Batsman/i);
-                  let searchArea = batIdx !== -1 ? bodyText.substring(batIdx, batIdx + 600) : bodyText;
-                  let batterRegex = /([A-Z][a-zA-Z\s\.\-']{2,25}?)\s+(\d{1,3})\s*\(\s*(\d{1,3})\s*\)/g;
-                  let matches = [...searchArea.matchAll(batterRegex)];
-                  
-                  matches.forEach(m => {
-                      let nameOnly = m[1].replace(/[A-Z]{3,}/g, '').trim();
-                      let words = nameOnly.split(/\s+/);
-                      nameOnly = words.slice(-2).join(' ');
-                      if (nameOnly.length > 2 && !nameOnly.toLowerCase().includes('total')) {
-                          validBatters.push(`${nameOnly} ${m[2]}(${m[3]})`);
-                      }
-                  });
-              }
+
+              matches.forEach(m => {
+                  let nameOnly = m[1].replace(/(Batter|Batsman|Total|Extras|Target)/gi, '').trim();
+                  let words = nameOnly.split(/\s+/).filter(w => w.length > 0);
+                  nameOnly = words.slice(-2).join(' ');
+                  if (nameOnly.length > 2) {
+                      validBatters.push(`${nameOnly} ${m[2]}(${m[3]})`);
+                  }
+              });
 
               if (validBatters.length > 0) {
-                  // ALPHABETICAL LOCK: Forces the names to stay on the same lines permanently.
-                  validBatters.sort();
-                  
-                  let b1Full = validBatters[0]; 
-                  let b2Full = validBatters.length > 1 ? validBatters[1] : ""; 
-
-                  let isN1Active = true;
-
-                  if (b2Full.includes('*')) {
-                      isN1Active = false;
-                  } else if (b1Full.includes('*')) {
-                      isN1Active = true;
-                  } else {
-                      // Determine via DOM artifact injector
-                      let n1Last = b1Full.split(' ')[0].trim();
-                      let n2Last = b2Full ? b2Full.split(' ')[0].trim() : "XYZ123";
-
-                      let idx1 = bodyText.indexOf(n1Last);
-                      let idx2 = bodyText.indexOf(n2Last);
-
-                      let st1 = bodyText.indexOf('[STRIKER]', idx1);
-                      let st2 = bodyText.indexOf('[STRIKER]', idx2);
-
-                      let dist1 = (idx1 !== -1 && st1 !== -1 && st1 > idx1) ? (st1 - idx1) : 9999;
-                      let dist2 = (idx2 !== -1 && st2 !== -1 && st2 > idx2) ? (st2 - idx2) : 9999;
-
-                      if (dist2 < dist1 && dist2 < 50) {
-                          isN1Active = false;
-                      }
-                  }
-
-                  b1Full = b1Full.replace(/\*/g, '').trim();
-                  b2Full = b2Full.replace(/\*/g, '').trim();
-
-                  if (isN1Active) {
-                      payload.batter_1 = b1Full + " 🏏"; 
-                      payload.batter_2 = b2Full || "Off-Strike";
-                  } else {
-                      payload.batter_1 = b1Full; 
-                      payload.batter_2 = b2Full + " 🏏"; 
-                  }
+                  // The FIRST player extracted is physically on top. Therefore, they are the STRIKER.
+                  payload.striker = validBatters[0] + " 🏏"; 
+                  payload.non_striker = validBatters.length > 1 ? validBatters[1] : "Off-Strike";
               } else { 
-                  payload.batter_1 = "Target Engaged"; payload.batter_2 = "Off-Strike"; 
+                  payload.striker = "Target Engaged"; payload.non_striker = "Off-Strike"; 
               }
 
               if (payload.live_score && payload.live_score.includes('0/0 (0.0)')) { 
-                  payload.batter_1 = "Awaiting Batters"; payload.batter_2 = "Standby"; 
+                  payload.striker = "Awaiting Batters"; payload.non_striker = "Standby"; 
               }
-          } catch(e) { payload.batter_1 = "Extractor Error"; payload.batter_2 = "Extractor Error"; }
+          } catch(e) { payload.striker = "Extractor Error"; payload.non_striker = "Extractor Error"; }
 
+          // ==========================================
+          // BOWLER MILESTONE FILTER FIX
+          // ==========================================
           try {
               let bowIdx = bodyText.search(/Bowler/i);
               let bowArea = bowIdx !== -1 ? bodyText.substring(bowIdx, bowIdx + 200) : bodyText;
               let bowMatch = bowArea.match(/([A-Z][a-zA-Z\s\.\-']{2,25}?)\s+(\d{1,2}\s*\-\s*\d{1,3}|\d{1,2}\s*\.\s*\d{1,2}\s+\d)/);
               
               if (bowMatch && bowMatch[1]) {
-                  let name = bowMatch[1].replace(/(Econ|ECO|Overs|Runs|Wickets|Bowler|IMP|STRIKER|SVG|\[|\])/gi, '').replace(/[A-Z]{3,}/g, '').trim();
+                  // Stripping out specific Crex alert artifacts like "Milestone", "Partnership", "Review"
+                  let name = bowMatch[1].replace(/(Econ|ECO|Overs|Runs|Wickets|Bowler|IMP|STRIKER|SVG|\[|\]|Milestone|Partnership|Timeout|Review)/gi, '').replace(/[A-Z]{3,}/g, '').trim();
                   let words = name.replace(/\s+/g, ' ').trim().split(' ');
                   payload.bowler = words.slice(-2).join(' ');
               } else { payload.bowler = "Active Bowler"; }
@@ -537,8 +501,7 @@ module.exports = async function (req, res) {
                       }
 
                       let sRuns = 0, sBalls = 0, sSR = 0;
-                      let sMatch = payload.batter_1.match(/(\d+)\s*\(\s*(\d+)\s*\)/);
-                      if (!sMatch) sMatch = payload.batter_2.match(/(\d+)\s*\(\s*(\d+)\s*\)/);
+                      let sMatch = payload.striker.match(/(\d+)\s*\(\s*(\d+)\s*\)/);
                       if (sMatch) {
                           sRuns = parseInt(sMatch[1]); sBalls = parseInt(sMatch[2]);
                           if (sBalls > 0) sSR = (sRuns / sBalls) * 100;
