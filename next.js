@@ -70,7 +70,94 @@ export async function POST(request: Request) {
       baseExpectedRunRate * 0.5, // Floor value so prediction doesn't hit 0
       baseExpectedRunRate + dynamicRunRateAdjustment
     );
+// live.js - The Data Ingestion and API Linkage
 
+// 1. Maintain a rolling memory of the most recent deliveries
+let recentBallsMemory = [];
+const MAX_MEMORY_LENGTH = 18; // We only need the last 3 overs to detect immediate patterns
+
+/**
+ * This function triggers the moment a new ball is bowled.
+ * (You would link this to your WebSocket or Live Polling API)
+ */
+function onNewBallBowled(liveBallData) {
+  // Add the newest ball to our memory array
+  recentBallsMemory.push(liveBallData);
+  
+  // Keep the array limited to the last 18 balls to prevent data bloat
+  if (recentBallsMemory.length > MAX_MEMORY_LENGTH) {
+    recentBallsMemory.shift(); // Removes the oldest ball
+  }
+
+  // Immediately ask the AI for a new prediction
+  fetchLivePrediction();
+}
+
+/**
+ * THE LINK: This sends the live data to our Vercel API route
+ */
+async function fetchLivePrediction() {
+  // Construct the payload required by our Next.js Edge route
+  const payload = {
+    recentBalls: recentBallsMemory,
+    baseExpectedRunRate: 8.5, // Your historical baseline
+    wicketsLeft: 7,           // Update dynamically
+    ballsRemaining: 30        // Update dynamically
+  };
+
+  try {
+    // Calling the Next.js API Route we built earlier
+    const response = await fetch('/api/predict', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) throw new Error('API linkage failed');
+
+    const aiData = await response.json();
+
+    if (aiData.success) {
+      updateDashboard(aiData);
+    }
+
+  } catch (error) {
+    console.error("Live sync error: Could not reach the prediction API.", error);
+  }
+}
+
+/**
+ * Updates your User Interface with the AI's real-time calculations
+ */
+function updateDashboard(aiData) {
+  const { livePredictedRunRate } = aiData.analytics;
+  const { projectedRunsInRemainingBalls, explanation } = aiData.projection;
+
+  console.log(`🔥 AI UPDATE: New Projected Run Rate is ${livePredictedRunRate}`);
+  console.log(`🎯 Projected Runs Off Remaining Balls: ${projectedRunsInRemainingBalls}`);
+  console.log(`🧠 AI Logic: ${explanation}`);
+  
+  // Here you would target your DOM elements, e.g.:
+  // document.getElementById('projected-score').innerText = projectedRunsInRemainingBalls;
+}
+
+// --- SIMULATION TEST ---
+// Simulating a live ball coming in from a match feed
+setTimeout(() => {
+  const simulatedBallData = {
+    runs: 4,
+    isBoundary: true,
+    isWicket: false,
+    ballSpeedKmph: 135,
+    expectedSpeedKmph: 140, // Bowler dropped pace
+    pitchDeviationCm: 45    // Missed the length
+  };
+  
+  onNewBallBowled(simulatedBallData);
+}, 2000);
+    
     // Calculate final projected score for the remaining balls
     const projectedRunsInRemainingBalls = Math.round((livePredictedRunRate / 6) * ballsRemaining);
 
