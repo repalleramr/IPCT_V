@@ -2,7 +2,6 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 
 module.exports = async function (req, res) {
-  // --- AGGRESSIVE ANTI-CACHING ARMOR ---
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -17,7 +16,6 @@ module.exports = async function (req, res) {
   let rawDateStr = req.query.time || ""; 
   let targetDate = rawDateStr.split('(')[0].trim().toLowerCase();
   
-  // Ledger/Position Tracking Parameter
   let userPosition = (req.query.position || "NONE").toUpperCase().trim();
 
   const headers = { 
@@ -28,7 +26,7 @@ module.exports = async function (req, res) {
   let payload = {
         title: "TARGET UNKNOWN", status: "Scanning Fields...", match_state: "standby", winner: "PENDING",
         live_score: "NO SCORE", current_rr: "NO CRR", required_rr: "NO REQ",
-        striker: "NO STRIKER", non_striker: "NO NON-STRIKER", bowler: "NO BOWLER",
+        batter_1: "NO BATTER 1", batter_2: "NO BATTER 2", bowler: "NO BOWLER",
         toss: "NO TOSS DATA", venue: "VENUE HIDDEN", last_over: ["-", "-", "-", "-", "-", "-"],
         prediction: "AI OFFLINE", match_prediction: "", source_url: "Hunting...", fetch_code: "OH"
   };
@@ -94,18 +92,6 @@ module.exports = async function (req, res) {
         }
       }
     }
-    for (const [code, aliases] of Object.entries(teamMap)) {
-      for (const alias of aliases) {
-        const re = new RegExp(`\\b${escapeRegExp(alias)}\\b[^0-9]{0,40}(\\d{1,3})[\\s\\-]+(\\d{1,3})\\b`, "i");
-        const m = flat.match(re);
-        if (m) {
-          const a = parseInt(m[1], 10); const b = parseInt(m[2], 10);
-          if (a > 0 && b > 0 && a <= 150 && b <= 150 && Math.abs(a - b) <= 4) {
-            return { team: code.toUpperCase(), back: Math.min(a, b), lay: Math.max(a, b), raw: m[0] };
-          }
-        }
-      }
-    }
     return null;
   }
 
@@ -139,9 +125,8 @@ module.exports = async function (req, res) {
                   const cRes = await axios.get(fetchUrl, { headers, timeout: 3000 });
                   $ = cheerio.load(cRes.data); 
                   
-                  // SURGICAL ARTIFACT INJECTION
                   $('img[src*="bat" i], img[alt*="bat" i]').replaceWith(' [STRIKER] ');
-                  $('svg').replaceWith(' [SVG] ');
+                  $('svg').replaceWith(' [STRIKER] ');
                   $('.cb-font-bold').append(' [STRIKER] ');
                   $('script, style, noscript').remove();
 
@@ -300,69 +285,82 @@ module.exports = async function (req, res) {
           } catch(e) { payload.current_rr = "Error"; payload.required_rr = "Error"; }
 
           // ==========================================
-          // ARTIFACT-DRIVEN STRIKER ENGINE
+          // BATTER 1 / BATTER 2 STRIKE SHIFT ENGINE
           // ==========================================
           try {
-              let b1Full = ""; let b2Full = "";
-              let titleBatterRegex = /\(([A-Za-z\s\.\-']+?\s*\d{1,3}\s*\(\s*\d{1,3}\s*\))(?:\s*,\s*([A-Za-z\s\.\-']+?\s*\d{1,3}\s*\(\s*\d{1,3}\s*\)))?\)/;
+              let validBatters = [];
+              let titleBatterRegex = /\(([A-Za-z\s\.\-'\*]+?\s*\d{1,3}\s*\(\s*\d{1,3}\s*\))(?:\s*,\s*([A-Za-z\s\.\-'\*]+?\s*\d{1,3}\s*\(\s*\d{1,3}\s*\)))?\)/;
               let titleMatch = pageTitle.match(titleBatterRegex);
               
               if (titleMatch && titleMatch[1]) {
-                  b1Full = titleMatch[1].trim(); 
-                  b2Full = titleMatch[2] ? titleMatch[2].trim() : ""; 
+                  validBatters.push(titleMatch[1].trim());
+                  if (titleMatch[2]) validBatters.push(titleMatch[2].trim());
+              } else {
+                  let batIdx = bodyText.search(/Batter|Batsman/i);
+                  let searchArea = batIdx !== -1 ? bodyText.substring(batIdx, batIdx + 600) : bodyText;
+                  let batterRegex = /([A-Z][a-zA-Z\s\.\-']{2,25}?)\s+(\d{1,3})\s*\(\s*(\d{1,3})\s*\)/g;
+                  let matches = [...searchArea.matchAll(batterRegex)];
+                  
+                  matches.forEach(m => {
+                      let nameOnly = m[1].replace(/[A-Z]{3,}/g, '').trim();
+                      let words = nameOnly.split(/\s+/);
+                      nameOnly = words.slice(-2).join(' ');
+                      if (nameOnly.length > 2 && !nameOnly.toLowerCase().includes('total')) {
+                          validBatters.push(`${nameOnly} ${m[2]}(${m[3]})`);
+                      }
+                  });
               }
 
-              if (b1Full) {
-                  let isN1Striker = true;
-                  let batIdx = bodyText.search(/Batter|Batsman/i);
-                  let searchArea = batIdx !== -1 ? bodyText.substring(batIdx, batIdx + 400) : bodyText;
-
-                  let n1LastMatch = b1Full.match(/([a-zA-Z]+)\s+\d/);
-                  let n1Last = n1LastMatch ? n1LastMatch[1] : b1Full.split(' ')[0];
+              if (validBatters.length > 0) {
+                  // ALPHABETICAL LOCK: Forces the names to stay on the same lines permanently.
+                  validBatters.sort();
                   
-                  let n2LastMatch = b2Full ? b2Full.match(/([a-zA-Z]+)\s+\d/) : null;
-                  let n2Last = n2LastMatch ? n2LastMatch[1] : (b2Full ? b2Full.split(' ')[0] : "XYZ123");
+                  let b1Full = validBatters[0]; 
+                  let b2Full = validBatters.length > 1 ? validBatters[1] : ""; 
 
-                  // Look for the injected tags within 35 characters of the name
-                  let regexN2 = new RegExp(n2Last + ".{0,35}\\[(STRIKER|SVG)\\]", "i");
-                  let regexN1 = new RegExp(n1Last + ".{0,35}\\[(STRIKER|SVG)\\]", "i");
+                  let isN1Active = true;
 
-                  if (b2Full && regexN2.test(searchArea) && !regexN1.test(searchArea)) {
-                      isN1Striker = false;
-                  } else if (regexN1.test(searchArea) && !regexN2.test(searchArea)) {
-                      isN1Striker = true;
+                  if (b2Full.includes('*')) {
+                      isN1Active = false;
+                  } else if (b1Full.includes('*')) {
+                      isN1Active = true;
                   } else {
-                      // Strict distance fallback if both or neither match perfectly
-                      let idx1 = searchArea.indexOf(n1Last);
-                      let idx2 = searchArea.indexOf(n2Last);
-                      
-                      if (idx1 !== -1 && idx2 !== -1) {
-                          let s1 = searchArea.indexOf('[SVG]', idx1);
-                          let s2 = searchArea.indexOf('[SVG]', idx2);
-                          let st1 = searchArea.indexOf('[STRIKER]', idx1);
-                          let st2 = searchArea.indexOf('[STRIKER]', idx2);
-                          
-                          let dist1 = Math.min(s1 !== -1 ? s1 - idx1 : 9999, st1 !== -1 ? st1 - idx1 : 9999);
-                          let dist2 = Math.min(s2 !== -1 ? s2 - idx2 : 9999, st2 !== -1 ? st2 - idx2 : 9999);
-                          
-                          // If Player 2 is physically closer to the bat marker, they are the striker
-                          if (dist2 < dist1 && dist2 < 50) isN1Striker = false;
+                      // Determine via DOM artifact injector
+                      let n1Last = b1Full.split(' ')[0].trim();
+                      let n2Last = b2Full ? b2Full.split(' ')[0].trim() : "XYZ123";
+
+                      let idx1 = bodyText.indexOf(n1Last);
+                      let idx2 = bodyText.indexOf(n2Last);
+
+                      let st1 = bodyText.indexOf('[STRIKER]', idx1);
+                      let st2 = bodyText.indexOf('[STRIKER]', idx2);
+
+                      let dist1 = (idx1 !== -1 && st1 !== -1 && st1 > idx1) ? (st1 - idx1) : 9999;
+                      let dist2 = (idx2 !== -1 && st2 !== -1 && st2 > idx2) ? (st2 - idx2) : 9999;
+
+                      if (dist2 < dist1 && dist2 < 50) {
+                          isN1Active = false;
                       }
                   }
 
-                  if (isN1Striker) {
-                      payload.striker = b1Full + " 🏏"; payload.non_striker = b2Full || "Off-Strike";
+                  b1Full = b1Full.replace(/\*/g, '').trim();
+                  b2Full = b2Full.replace(/\*/g, '').trim();
+
+                  if (isN1Active) {
+                      payload.batter_1 = b1Full + " 🏏"; 
+                      payload.batter_2 = b2Full || "Off-Strike";
                   } else {
-                      payload.striker = b1Full; payload.non_striker = b2Full + " 🏏"; 
+                      payload.batter_1 = b1Full; 
+                      payload.batter_2 = b2Full + " 🏏"; 
                   }
               } else { 
-                  payload.striker = "Target Engaged"; payload.non_striker = "Off-Strike"; 
+                  payload.batter_1 = "Target Engaged"; payload.batter_2 = "Off-Strike"; 
               }
 
               if (payload.live_score && payload.live_score.includes('0/0 (0.0)')) { 
-                  payload.striker = "Awaiting Batters"; payload.non_striker = "Standby"; 
+                  payload.batter_1 = "Awaiting Batters"; payload.batter_2 = "Standby"; 
               }
-          } catch(e) { payload.striker = "Extractor Error"; payload.non_striker = "Extractor Error"; }
+          } catch(e) { payload.batter_1 = "Extractor Error"; payload.batter_2 = "Extractor Error"; }
 
           try {
               let bowIdx = bodyText.search(/Bowler/i);
@@ -393,9 +391,6 @@ module.exports = async function (req, res) {
               }
           } catch(e) { payload.last_over = ["E", "R", "R", "O", "R", "!"]; }
 
-          // ==========================================================
-          // [TARGET #13] PRO BOOKIE AI & LIVE MARKET SNIPER + RISK MGMT
-          // ==========================================================
           try {
               if (payload.live_score.includes('/')) {
                   let scoreMatchClean = payload.live_score.match(/(\d+)[\/\-](\d+)\s*\(?([\d\.]+)\)?/);
@@ -542,7 +537,8 @@ module.exports = async function (req, res) {
                       }
 
                       let sRuns = 0, sBalls = 0, sSR = 0;
-                      let sMatch = payload.striker.match(/(\d+)\s*\(\s*(\d+)\s*\)/);
+                      let sMatch = payload.batter_1.match(/(\d+)\s*\(\s*(\d+)\s*\)/);
+                      if (!sMatch) sMatch = payload.batter_2.match(/(\d+)\s*\(\s*(\d+)\s*\)/);
                       if (sMatch) {
                           sRuns = parseInt(sMatch[1]); sBalls = parseInt(sMatch[2]);
                           if (sBalls > 0) sSR = (sRuns / sBalls) * 100;
