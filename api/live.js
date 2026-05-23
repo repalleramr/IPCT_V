@@ -1,6 +1,6 @@
 // ==============================================================================
-// MI6 QUANTUM ORACLE - CREX HYDRATION FIXED BUILD
-// Version: 10.0.0
+// MI6 QUANTUM ORACLE - FULL FIXED BUILD
+// Version: 10.2.0 FINAL MOBILE REPLACE BUILD
 // ==============================================================================
 const axios = require('axios');
 const cheerio = require('cheerio');
@@ -26,13 +26,11 @@ module.exports = async function (req, res) {
   // ==============================================================================
   let targetUrl = req.query.url || "";
   let targetTeams = (req.query.teams || "").toLowerCase().trim();
-  let rawDateStr = req.query.time || "";
   let userPosition = (req.query.position || "NONE").toUpperCase().trim();
 
   const headers = {
-    'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-G991U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Mobile Safari/537.36',
+    'User-Agent': 'Mozilla/5.0 (Linux; Android 13)',
     'Accept': '*/*',
-    'Accept-Language': 'en-US,en;q=0.9',
     'Cache-Control': 'no-cache',
     'Pragma': 'no-cache'
   };
@@ -67,7 +65,7 @@ module.exports = async function (req, res) {
   };
 
   // ==============================================================================
-  // HELPERS
+  // TEAM ALIASES
   // ==============================================================================
   const teamAliases = {
     "chennai": ["csk", "chennai", "super kings"],
@@ -115,12 +113,14 @@ module.exports = async function (req, res) {
 
     let timestampBuster = Date.now();
 
-    let htmlAcquired = false;
     let rawHtmlData = "";
+    let cleanText = "";
     let pageTitle = "";
 
+    let htmlAcquired = false;
+
     // ==============================================================================
-    // FIND CREX MATCH URL
+    // FIND CREX URL
     // ==============================================================================
     let crexUrl = "";
 
@@ -134,7 +134,7 @@ module.exports = async function (req, res) {
 
         const fixtureRes = await axios.get(
           `https://crex.live/fixtures/match-list?_t=${timestampBuster}`,
-          { headers, timeout: 7000 }
+          { headers, timeout: 8000 }
         );
 
         const $$ = cheerio.load(fixtureRes.data);
@@ -165,13 +165,13 @@ module.exports = async function (req, res) {
     } catch (e) {}
 
     // ==============================================================================
-    // FETCH MATCH PAGE
+    // FETCH PAGE
     // ==============================================================================
     if (crexUrl) {
 
       try {
 
-        const cRes = await axios.get(
+        const response = await axios.get(
           crexUrl + "?_t=" + timestampBuster,
           {
             headers,
@@ -179,15 +179,17 @@ module.exports = async function (req, res) {
           }
         );
 
-        const $ = cheerio.load(cRes.data);
+        const html = response.data;
+
+        const $ = cheerio.load(html);
 
         pageTitle = $('title').text() || "";
 
-        // ==========================================================================
-        // HYDRATION FIX
-        // ==========================================================================
-        rawHtmlData = cRes.data || "";
+        rawHtmlData = html;
 
+        // ==========================================================================
+        // NEXTJS HYDRATION EXTRACTION
+        // ==========================================================================
         let embeddedJson = "";
 
         let nextDataMatch = rawHtmlData.match(
@@ -206,14 +208,6 @@ module.exports = async function (req, res) {
           embeddedJson += " " + apolloMatch[1];
         }
 
-        let reduxMatch = rawHtmlData.match(
-          /window\.__INITIAL_STATE__\s*=\s*(\{.*?\});/s
-        );
-
-        if (reduxMatch && reduxMatch[1]) {
-          embeddedJson += " " + reduxMatch[1];
-        }
-
         embeddedJson += " " + $('body').text();
 
         rawHtmlData = embeddedJson
@@ -223,10 +217,10 @@ module.exports = async function (req, res) {
           .replace(/\\n/g, ' ')
           .replace(/\\t/g, ' ');
 
-        payload.source_url = "CREX (Tier 1 Speed)";
-        payload.fetch_code = "UREKHA";
-
         htmlAcquired = true;
+
+        payload.fetch_code = "UREKHA";
+        payload.source_url = "CREX (Tier 1 Speed)";
 
       } catch (e) {}
     }
@@ -247,10 +241,11 @@ module.exports = async function (req, res) {
     // ==============================================================================
     // CLEAN TEXT
     // ==============================================================================
-    let cleanText = rawHtmlData
+    cleanText = rawHtmlData
       .replace(/<[^>]+>/g, ' ')
       .replace(/[{}[\]",]/g, ' ')
-      .replace(/\s+/g, ' ');
+      .replace(/\s+/g, ' ')
+      .trim();
 
     // ==============================================================================
     // TITLE
@@ -271,14 +266,26 @@ module.exports = async function (req, res) {
     // SCORE
     // ==============================================================================
     let scoreRegex =
-      /([A-Z]{2,4})\s*(\d+)\/(\d+)\s*\(?(\d+\.\d+)\)?/i;
+      /([A-Z]{2,4})\s*(\d+)\/(\d+)\s*\(?(\d+\.\d+)\)?|([A-Z]{2,4})\s*(\d+)-(\d+)\s*\(?(\d+\.\d+)\)?/i;
 
     let scoreMatch = cleanText.match(scoreRegex);
 
     if (scoreMatch) {
 
+      let tm =
+        scoreMatch[1] || scoreMatch[5];
+
+      let rs =
+        scoreMatch[2] || scoreMatch[6];
+
+      let wk =
+        scoreMatch[3] || scoreMatch[7];
+
+      let ov =
+        scoreMatch[4] || scoreMatch[8];
+
       payload.live_score =
-        `${scoreMatch[1]} ${scoreMatch[2]}/${scoreMatch[3]} (${scoreMatch[4]})`;
+        `${tm} ${rs}/${wk} (${ov})`;
 
       payload.match_state = "live";
     }
@@ -286,23 +293,62 @@ module.exports = async function (req, res) {
     // ==============================================================================
     // STATUS
     // ==============================================================================
-    let statusMatch =
-      cleanText.match(/(need\s+\d+|won by.*?|innings break|strategic timeout|live)/i);
+    let statusPatterns = [
 
-    if (statusMatch) {
-      payload.status = statusMatch[1];
-    } else if (payload.match_state === "live") {
+      /([A-Za-z\s]+won by\s+\d+\s+(runs|wickets))/i,
+
+      /(need\s+\d+\s+runs?.*?\d+\s+balls?)/i,
+
+      /(innings break)/i,
+
+      /(strategic timeout)/i,
+
+      /(live)/i
+    ];
+
+    for (let p of statusPatterns) {
+
+      let sm = cleanText.match(p);
+
+      if (sm && sm[1]) {
+        payload.status = sm[1];
+        break;
+      }
+    }
+
+    if (
+      payload.status === "Scanning Fields..." &&
+      payload.match_state === "live"
+    ) {
       payload.status = "Live Match Active";
     }
 
     // ==============================================================================
     // TOSS
     // ==============================================================================
-    let tossMatch =
-      cleanText.match(/([A-Za-z\s]+won the toss[^\.]+)/i);
+    let tossPatterns = [
 
-    if (tossMatch) {
-      payload.toss = tossMatch[1].trim();
+      /([A-Za-z\s]+won the toss and elected to [A-Za-z]+)/i,
+
+      /([A-Za-z\s]+won the toss and chose to [A-Za-z]+)/i,
+
+      /([A-Za-z\s]+opted to [A-Za-z]+)/i,
+
+      /toss\s*:\s*([A-Za-z\s]+)/i
+    ];
+
+    for (let tp of tossPatterns) {
+
+      let tm = cleanText.match(tp);
+
+      if (tm && tm[1]) {
+
+        payload.toss = tm[1]
+          .replace(/\s+/g, ' ')
+          .trim();
+
+        break;
+      }
     }
 
     // ==============================================================================
@@ -312,9 +358,14 @@ module.exports = async function (req, res) {
       cleanText.match(/Venue\s*:?\s*([A-Za-z\s,]+)/i);
 
     if (venueMatch) {
-      payload.venue = venueMatch[1].trim();
+
+      payload.venue =
+        venueMatch[1].trim();
+
     } else {
+
       let homeCode = t1A[0];
+
       if (homeVenues[homeCode]) {
         payload.venue = homeVenues[homeCode];
       }
@@ -323,7 +374,8 @@ module.exports = async function (req, res) {
     // ==============================================================================
     // CRR / RRR
     // ==============================================================================
-    let crrMatch = cleanText.match(/CRR\s*:?\s*(\d+\.\d+)/i);
+    let crrMatch =
+      cleanText.match(/CRR\s*:?\s*(\d+\.\d+)/i);
 
     if (crrMatch) {
       payload.current_rr = crrMatch[1];
@@ -342,28 +394,49 @@ module.exports = async function (req, res) {
     // BATTERS
     // ==============================================================================
     let batterRegex =
-      /([A-Z][a-z]+\s?[A-Z]?[a-z]*)\s+(\d+)\s*\((\d+)\)/g;
+      /([A-Z][a-z]+(?:\s[A-Z][a-z]+){0,2})\s+(\d+)\s*\((\d+)\)/g;
 
     let batters = [];
-    let m;
+    let bm;
 
-    while ((m = batterRegex.exec(cleanText)) !== null) {
+    while ((bm = batterRegex.exec(cleanText)) !== null) {
 
-      let name = m[1].trim();
+      let nm = bm[1].trim();
 
       if (
-        name.length > 2 &&
-        !name.toLowerCase().includes('total') &&
-        !name.toLowerCase().includes('extras')
+        nm.length > 2 &&
+        !nm.toLowerCase().includes('total') &&
+        !nm.toLowerCase().includes('extras') &&
+        !nm.toLowerCase().includes('partnership')
       ) {
 
         batters.push(
-          `${name} ${m[2]}(${m[3]})`
+          `${nm} ${bm[2]}(${bm[3]})`
         );
       }
     }
 
-    batters = [...new Set(batters)];
+    let uniqueBatters = [];
+
+    batters.forEach(b => {
+
+      let exists = uniqueBatters.find(x => {
+
+        let a = x.toLowerCase();
+        let c = b.toLowerCase();
+
+        return (
+          a.includes(c) ||
+          c.includes(a)
+        );
+      });
+
+      if (!exists) {
+        uniqueBatters.push(b);
+      }
+    });
+
+    batters = uniqueBatters;
 
     if (batters[0]) {
       payload.batter_1 = batters[0] + " 🏏";
@@ -376,13 +449,36 @@ module.exports = async function (req, res) {
     // ==============================================================================
     // BOWLER
     // ==============================================================================
-    let bowlRegex =
-      /([A-Z][a-z]+\s?[A-Z]?[a-z]*)\s+(\d+\-\d+|\d+\.\d+\s+\d+)/;
+    let bowlerPatterns = [
 
-    let bowlMatch = cleanText.match(bowlRegex);
+      /bowler\s*([A-Z][a-z]+\s?[A-Z]?[a-z]*)/i,
 
-    if (bowlMatch) {
-      payload.bowler = bowlMatch[1];
+      /([A-Z][a-z]+\s?[A-Z]?[a-z]*)\s+\d+\-\d+\-\d+\-\d+/,
+
+      /([A-Z][a-z]+\s?[A-Z]?[a-z]*)\s+\d+\.\d+\s+\d+\s+\d+/,
+
+      /([A-Z][a-z]+\s?[A-Z]?[a-z]*)\s+\d+\.\d+\s+\d+/
+    ];
+
+    for (let p of bowlerPatterns) {
+
+      let bm = cleanText.match(p);
+
+      if (bm && bm[1]) {
+
+        let nm = bm[1]
+          .replace(/bowler/i, '')
+          .trim();
+
+        if (
+          nm.length > 2 &&
+          !nm.toLowerCase().includes('josh inglis')
+        ) {
+
+          payload.bowler = nm;
+          break;
+        }
+      }
     }
 
     // ==============================================================================
@@ -401,7 +497,7 @@ module.exports = async function (req, res) {
     }
 
     // ==============================================================================
-    // TRUE ODDS SCRAPER
+    // TRUE ODDS
     // ==============================================================================
     let oddsFound = false;
 
@@ -412,7 +508,7 @@ module.exports = async function (req, res) {
       for (const alias of aliases) {
 
         let re = new RegExp(
-          `\\b${escapeRegExp(alias)}\\b.{0,40}?(\\d{1,3})\\s+(\\d{1,3})`,
+          `\\b${escapeRegExp(alias)}\\b[^\\d]{0,25}(\\d{1,3})[^\\d]{1,5}(\\d{1,3})`,
           'i'
         );
 
@@ -446,19 +542,18 @@ module.exports = async function (req, res) {
       }
     }
 
-    // ==============================================================================
-    // AI FALLBACK
-    // ==============================================================================
     if (!oddsFound) {
-
       payload.match_prediction =
         "[TRUE ODDS] WAITING FOR LIVE DATA";
     }
 
     // ==============================================================================
-    // SIMPLE AI
+    // AI ENGINE
     // ==============================================================================
-    if (payload.live_score.includes('/')) {
+    if (
+      payload.live_score !== "NO SCORE" &&
+      payload.live_score !== "Match Not Started"
+    ) {
 
       let s =
         payload.live_score.match(/(\d+)\/(\d+)\s*\(([\d\.]+)\)/);
@@ -469,21 +564,25 @@ module.exports = async function (req, res) {
         let wkts = parseInt(s[2]);
         let overs = parseFloat(s[3]);
 
-        let projected =
-          Math.floor((runs / overs) * 20);
+        let projected = 180;
 
-        if (overs < 2) {
-          projected = 180;
+        if (overs > 0) {
+          projected =
+            Math.floor((runs / overs) * 20);
+        }
+
+        let tactic = "🟡 HOLD - BALANCED";
+
+        if (projected >= 210) {
+          tactic = "🟢 PLAY (BACK) - HIGH AGGRESSION";
+        }
+
+        if (projected <= 160) {
+          tactic = "🔴 EAT (LAY) - WEAK TOTAL";
         }
 
         payload.prediction =
-          `TARGETS: [20v: ${projected}] \nTACTIC: ${
-            projected >= 200
-              ? "🟢 PLAY (BACK) - HIGH AGGRESSION"
-              : projected >= 170
-              ? "🟡 HOLD - BALANCED"
-              : "🔴 EAT (LAY) - WEAK TOTAL"
-          }`;
+          `TARGETS: [20v: ${projected}] \nTACTIC: ${tactic}`;
       }
 
     } else {
@@ -492,9 +591,12 @@ module.exports = async function (req, res) {
     }
 
     // ==============================================================================
-    // PREMATCH
+    // MATCH STATE FINAL FIX
     // ==============================================================================
-    if (payload.live_score === "NO SCORE") {
+    if (
+      payload.live_score === "NO SCORE" ||
+      payload.live_score === "Match Not Started"
+    ) {
 
       payload.match_state = "future";
       payload.live_score = "Match Not Started";
@@ -502,9 +604,14 @@ module.exports = async function (req, res) {
       payload.prediction = "ORACLE OFFLINE";
 
       if (!payload.match_prediction) {
+
         payload.match_prediction =
           "[TRUE ODDS] WAITING FOR LIVE DATA";
       }
+
+    } else {
+
+      payload.match_state = "live";
     }
 
     // ==============================================================================
