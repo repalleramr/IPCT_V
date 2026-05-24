@@ -123,9 +123,6 @@ module.exports = async function (req, res) {
     return t1A.some(a => txt.includes(a)) && t2A.some(a => txt.includes(a));
   }
 
-  // =========================================================================
-  // CORE SCRAPER ENGINE (PRESERVED EXACTLY AS VERIFIED)
-  // =========================================================================
   try {
     let htmlAcquired = false; let timestampBuster = Date.now();
 
@@ -390,7 +387,7 @@ module.exports = async function (req, res) {
       } catch (e) { payload.last_over = ["E", "R", "R", "O", "R", "!"]; }
 
       // ==========================================================
-      // ODDS SNIPER (PRESERVED)
+      // ODDS SNIPER
       // ==========================================================
       try {
         if (payload.live_score.includes('/')) {
@@ -483,7 +480,6 @@ module.exports = async function (req, res) {
 
     // =========================================================================
     // [ADD-ON: HUMAN INTUITION MATRIX] (Isolated Safely)
-    // Extracts momentum and live pitch behavior using verified payload data.
     // =========================================================================
     try {
         if (payload.match_state === "live" && payload.live_score.includes('/')) {
@@ -499,7 +495,6 @@ module.exports = async function (req, res) {
                 let crr = parseFloat(payload.current_rr);
                 if (isNaN(crr) || totalBalls === 0) crr = 8.5;
 
-                // Calculate recent RR
                 let recentRuns = 0; let validBalls = 0; let recentWicketFell = false;
                 if (Array.isArray(payload.last_over)) {
                     payload.last_over.forEach(b => {
@@ -540,7 +535,6 @@ module.exports = async function (req, res) {
                     momentum = "Powerplay Settling";
                 }
 
-                // Append to existing match_prediction instead of overwriting
                 let chaseContext = "";
                 let isChasePhase = (payload.required_rr && !payload.required_rr.includes("REQ") && payload.required_rr !== "1st Innings" && payload.required_rr !== "Error");
                 if (isChasePhase) {
@@ -557,8 +551,7 @@ module.exports = async function (req, res) {
     }
 
     // =========================================================================
-    // [ADD-ON: QUANTUM HEDGE ENGINE] (Isolated Safely)
-    // Calculates Green Book exit points based on frontend Ledger parameters
+    // [ADD-ON: QUANTUM HEDGE ENGINE]
     // =========================================================================
     try {
         let aiAdvice = "";
@@ -566,7 +559,6 @@ module.exports = async function (req, res) {
         if (!isRealMarket || payload.match_state !== "live") {
              aiAdvice = `[HEDGE OFFLINE] Awaiting live market odds and active match state.`;
         } else {
-             // Case 1: You have NO bets (e1 and e2 are 0) - Generate ENTRY Point
              if (e1 === 0 && e2 === 0) {
                  aiAdvice = `[ENTRY PROTOCOL] No active ledger detected.\n`;
                  if (favPaise <= 35) {
@@ -577,12 +569,10 @@ module.exports = async function (req, res) {
                      aiAdvice += `> Match is balanced (${favPaise}p). PLAY (Back) ${favTeam} if you anticipate a massive over.`;
                  }
              } 
-             // Case 2: You have active bets - Generate GREEN BOOK EXIT Point
              else {
                  let expFav = 0; let expOpp = 0;
                  let oppTeam = "";
                  
-                 // SMART MAPPER: Convert full names like "DELHI CAPITALS" to "DC"
                  let normT1 = teamMap[t1Name.toLowerCase()] || t1Name;
                  let normT2 = teamMap[t2Name.toLowerCase()] || t2Name;
 
@@ -595,7 +585,6 @@ module.exports = async function (req, res) {
                  if (!matchT1 && !matchT2) {
                      aiAdvice = `[LEDGER ERROR] Could not map favorite team (${favTeam}) to your tracker inputs (${t1Name}/${t2Name}). Ensure abbreviations match exactly (e.g. KKR, MI).`;
                  } 
-                 // Winning on Favorite, Losing on Opponent (Standard Hedge)
                  else if (expFav > 0 && expOpp < 0) {
                      let requiredStake = Math.abs(expOpp);
                      let profitCost = requiredStake * (layPaise / 100);
@@ -608,7 +597,6 @@ module.exports = async function (req, res) {
                          aiAdvice = `🟡 [HEDGE PENDING]\nYou cannot Green Book yet. Market is ${layPaise}p. You must wait for ${favTeam} odds to drop to ${targetOdds.toFixed(0)}p to zero out your liability.`;
                      }
                  }
-                 // Losing on Favorite, Winning on Opponent (Reverse Hedge)
                  else if (expFav < 0 && expOpp > 0) {
                      let requiredStake = Math.abs(expFav) / (favPaise / 100);
                      let newOppProfit = expOpp - requiredStake;
@@ -620,11 +608,9 @@ module.exports = async function (req, res) {
                          aiAdvice = `🟡 [HEDGE PENDING]\nYou cannot Green Book yet. Market is ${favPaise}p. You must wait for ${favTeam} odds to rise to ${targetOdds.toFixed(0)}p to zero out your liability.`;
                      }
                  }
-                 // Green Book Already Exists
                  else if (expFav >= 0 && expOpp >= 0) {
                      aiAdvice = `✅ [BOOK SECURED]\nYou have zero liability. (${favTeam}: +${expFav.toFixed(0)} | ${oppTeam}: +${expOpp.toFixed(0)}). Enjoy the match.`;
                  }
-                 // Double Red Book
                  else {
                      aiAdvice = `🔴 [CRITICAL WARNING]\nYou are carrying liability on BOTH teams. Immediately Lay the favorite to balance the book.`;
                  }
@@ -638,8 +624,7 @@ module.exports = async function (req, res) {
     }
 
     // =========================================================================
-    // [ADD-ON: SHADOW TRADER (CONTRARIAN VALUE HUNTER)]
-    // Evaluates asymmetrical risk for Lay/Back anomalies against the market trend.
+    // [ADD-ON: SHADOW TRADER (CONTRARIAN VALUE HUNTER)] - ONLY FIX MADE HERE
     // =========================================================================
     try {
         if (isRealMarket && payload.match_state === "live") {
@@ -673,7 +658,10 @@ module.exports = async function (req, res) {
             let recentRR = validBalls > 0 ? (recentRuns / validBalls) * 6 : crr;
 
             if (favPaise > 0 && favPaise <= 20) {
-                contrarianAdvice = `\n<br><span style="color:#b366ff; font-weight:bold;">[SHADOW TRADER]</span> <span style="color:#fff;">${favTeam} is extremely cheap (${favPaise}p). Asymmetrical risk: High value to LAY ${favTeam} for a quick trading swing. One wicket shifts this market 30-40 paise.</span>`;
+                // MI6 PATCH: Check if the favorite is batting or bowling to determine the swing trigger.
+                let swingReason = (favTeam === batTeam) ? "One wicket" : "A quick flurry of boundaries";
+                
+                contrarianAdvice = `\n<br><span style="color:#b366ff; font-weight:bold;">[SHADOW TRADER]</span> <span style="color:#fff;">${favTeam} is extremely cheap (${favPaise}p). Asymmetrical risk: High value to LAY ${favTeam} for a quick trading swing. ${swingReason} shifts this market 30-40 paise.</span>`;
             } else if (isChasePhase && favTeam === batTeam && rrrVal > 10.0 && wkts >= 3) {
                 contrarianAdvice = `\n<br><span style="color:#b366ff; font-weight:bold;">[SHADOW TRADER]</span> <span style="color:#fff;">Market blindly backing ${favTeam}. RRR is creeping (${rrrVal.toFixed(1)}). High value to LAY ${favTeam} now before panic sets in on the scoreboard.</span>`;
             } else if (isChasePhase && favTeam !== batTeam && wkts <= 3 && rrrVal <= 11.0) {
