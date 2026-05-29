@@ -1,6 +1,6 @@
 // ==============================================================================
 // MI6 QUANTUM ORACLE - CHAMPIONSHIP SNIPER EDITION (GT vs RCB)
-// Uplink: Direct Strike (Bypassing Firewalls via Hardcoded Target)
+// Uplink: Direct Strike (With Clean Pre-Match Countdown / Standby State)
 // ==============================================================================
 const axios = require('axios');
 const cheerio = require('cheerio');
@@ -17,21 +17,17 @@ module.exports = async function (req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   // ==========================================
-  // DIRECT TARGET OVERRIDE (Firewall Bypass)
+  // DIRECT TARGET OVERRIDE
   // ==========================================
-  // We force the exact match URL so the scraper doesn't get blocked hunting for it.
   let exactTarget = "https://crex.live/cricket-live-score/gt-vs-rcb-final-indian-premier-league-2026-match-updates-11XM";
-  
-  // If you pass a URL via the app, it uses it. Otherwise, it defaults to the hardcoded final.
   let targetUrl = req.query.url || exactTarget;
-  targetUrl = targetUrl.replace('crex.com', 'crex.live'); // Prevents redirect crashes
+  targetUrl = targetUrl.replace('crex.com', 'crex.live');
 
   let e1 = parseFloat(req.query.e1) || 0; 
   let e2 = parseFloat(req.query.e2) || 0; 
   let t1Name = "GUJARAT TITANS";
   let t2Name = "ROYAL CHALLENGERS BENGALURU";
 
-  // Stealth headers to bypass Cloudflare
   const headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
@@ -104,7 +100,7 @@ module.exports = async function (req, res) {
     }
 
     // =========================================================================
-    // FIELD STATISTICS EXTRACTION
+    // FIELD STATISTICS EXTRACTION & STATE MACHINE
     // =========================================================================
     let statusText = $ ? $('.cb-status-msg, .match-status, .info-status, .cb-text-complete').first().text().trim() : "";
     let titleWin = pageTitle.match(/([a-zA-Z\s\-]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
@@ -112,7 +108,10 @@ module.exports = async function (req, res) {
     if (statusText) payload.status = statusText;
 
     let statusLower = (statusText || "").toLowerCase();
+    
+    // Strict criteria for evaluating if a match is actively live
     let isLiveScoreFormat = bodyText.match(/(GT|RCB)\s\d+[\/\-]\d+/i);
+    let scoreInTitle = pageTitle.match(/(GT|RCB)\s\d+[\/\-]\d+/i);
 
     if (statusLower.includes('won by') || statusLower.includes('tied') || statusLower.includes('abandoned')) {
       payload.match_state = "completed";
@@ -120,10 +119,10 @@ module.exports = async function (req, res) {
         let winMatch = statusText.match(/^(.*?)\s+won by/i);
         if (winMatch) payload.winner = winMatch[1].trim().toUpperCase();
       }
-    } else if (isLiveScoreFormat || bodyText.includes('CRR:') || bodyText.includes('REQ:')) {
+    } else if (isLiveScoreFormat || scoreInTitle || bodyText.includes('CRR:') || bodyText.includes('REQ:')) {
       payload.match_state = "live";
     } else {
-      payload.match_state = "future";
+      payload.match_state = "future"; // Match has not started yet
     }
 
     try {
@@ -140,6 +139,28 @@ module.exports = async function (req, res) {
     let favTeam = ""; let favPaise = 0; let layPaise = 0; let displayOdds = "N/A";
     let isWeatherInterrupted = false; let isChase = false; let maxProb = 50;
 
+    // =========================================================================
+    // CONDITION: MATCH NOT STARTED (CLEAN COUNTDOWN PROTOCOL)
+    // =========================================================================
+    if (payload.match_state === "future") {
+      payload.live_score = "MATCH NOT STARTED";
+      payload.status = statusText || "Awaiting Match Countdown...";
+      payload.current_rr = "0.00";
+      payload.required_rr = "0.00";
+      payload.striker = "Awaiting Live Play";
+      payload.non_striker = "Awaiting Live Play";
+      payload.bowler = "Awaiting Live Play";
+      payload.prediction = "COUNTDOWN ACTIVE";
+      payload.match_prediction = "Line Open Soon | Waiting for Telemetry";
+      payload.ledger_analysis = "[ENTRY PROTOCOL] No active live data. Waiting for match start.";
+      payload.last_over = ["-", "-", "-", "-", "-", "-"];
+      
+      return res.status(200).json({ success: true, match_info: payload });
+    }
+
+    // =========================================================================
+    // CONDITION: LIVE MATCH DATA HANDLING
+    // =========================================================================
     if (payload.match_state === "live") {
       try {
         if (payload.status === "Scanning Fields..." || payload.status === "") {
@@ -171,7 +192,7 @@ module.exports = async function (req, res) {
         else payload.required_rr = "1st Innings";
       } catch (e) { payload.current_rr = "Error"; payload.required_rr = "Error"; }
 
-      // --- ISOLATED STRIKER EXTRACTION ---
+      // --- BATTER EXTRACTION ---
       try {
         let safeText = bodyText.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([a-zA-Z])(\d)/g, '$1 $2');
         let batStart = safeText.search(/Batter|Batsman/i);
@@ -258,7 +279,7 @@ module.exports = async function (req, res) {
       } catch (e) { payload.last_over = ["E", "R", "R", "O", "R", "!"]; }
 
       // ==========================================================
-      // ODDS SNIPER & PROBABILITY ENGINE
+      // ODDS PROBABILITY LOGIC
       // ==========================================================
       try {
         if (payload.live_score.includes('/')) {
@@ -291,7 +312,6 @@ module.exports = async function (req, res) {
               else payload.prediction = `INNINGS ENDING`;
             }
 
-            // 100% Uptime Logic: Mathematical Win Probability
             let batTeam = payload.live_score.split(' ')[0] || "GT";
             let bowlTeam = (batTeam === "GT") ? "RCB" : "GT"; 
             let batWinProb = 50;
@@ -322,7 +342,6 @@ module.exports = async function (req, res) {
               favTeam = crexOdds.team; favPaise = crexOdds.back; layPaise = crexOdds.lay;
               displayOdds = `${favPaise}-${layPaise}`; isRealMarket = true;
             } else {
-              // Mathematical Fallback
               favTeam = batWinProb > 50 ? batTeam : bowlTeam;
               maxProb = Math.max(batWinProb, 100 - batWinProb);
               favPaise = Math.max(1, Math.round(((100 - maxProb) / maxProb) * 100));
@@ -336,9 +355,7 @@ module.exports = async function (req, res) {
         }
       } catch (e) { payload.match_prediction = "Error generating AI matrix."; }
 
-      // =========================================================================
-      // [ADD-ON: SHADOW TRADER]
-      // =========================================================================
+      // --- SHADOW TRADER PANEL ---
       try {
           if (isRealMarket) {
               let contrarianAdvice = "";
@@ -351,12 +368,12 @@ module.exports = async function (req, res) {
               if (contrarianAdvice) payload.match_prediction += contrarianAdvice;
           }
       } catch (err) {}
-    } else if (payload.match_state === "completed" || payload.match_state === "future") {
-      payload.live_score = payload.match_state === "completed" ? "Match Ended" : "Match Not Started";
+    } else if (payload.match_state === "completed") {
+      payload.live_score = "Match Ended";
     }
 
     // =========================================================================
-    // QUANTUM HEDGE ENGINE (GRAND FINAL STRICT MAPPER)
+    // QUANTUM HEDGE ENGINE
     // =========================================================================
     try {
         let aiAdvice = "";
