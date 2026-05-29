@@ -1,6 +1,6 @@
 // ==============================================================================
 // MI6 QUANTUM ORACLE - CHAMPIONSHIP SNIPER EDITION (GT vs RCB)
-// Uplink: Titanium Grade (Multi-Node Auto-Failover)
+// Uplink: Direct Strike (Bypassing Firewalls via Hardcoded Target)
 // ==============================================================================
 const axios = require('axios');
 const cheerio = require('cheerio');
@@ -17,22 +17,31 @@ module.exports = async function (req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   // ==========================================
-  // TELEMETRY BRIDGE (LEDGER DATA)
+  // DIRECT TARGET OVERRIDE (Firewall Bypass)
   // ==========================================
+  // We force the exact match URL so the scraper doesn't get blocked hunting for it.
+  let exactTarget = "https://crex.live/cricket-live-score/gt-vs-rcb-final-indian-premier-league-2026-match-updates-11XM";
+  
+  // If you pass a URL via the app, it uses it. Otherwise, it defaults to the hardcoded final.
+  let targetUrl = req.query.url || exactTarget;
+  targetUrl = targetUrl.replace('crex.com', 'crex.live'); // Prevents redirect crashes
+
   let e1 = parseFloat(req.query.e1) || 0; 
   let e2 = parseFloat(req.query.e2) || 0; 
   let t1Name = "GUJARAT TITANS";
   let t2Name = "ROYAL CHALLENGERS BENGALURU";
 
+  // Stealth headers to bypass Cloudflare
   const headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-    'Accept-Encoding': 'gzip, deflate, br',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Referer': 'https://www.google.com/',
     'Connection': 'keep-alive'
   };
 
   let payload = {
-    title: "GT VS RCB | GRAND FINAL", status: "Targeting Secure Nodes...", match_state: "standby", winner: "PENDING",
+    title: "GT VS RCB | GRAND FINAL", status: "Targeting Direct Node...", match_state: "standby", winner: "PENDING",
     live_score: "NO SCORE", current_rr: "NO CRR", required_rr: "NO REQ",
     striker: "NO STRIKER", non_striker: "NO NON-STRIKER", bowler: "NO BOWLER",
     toss: "NO TOSS DATA", venue: "Narendra Modi Stadium, Ahmedabad", last_over: ["-", "-", "-", "-", "-", "-"],
@@ -66,90 +75,31 @@ module.exports = async function (req, res) {
   }
 
   // =========================================================================
-  // MULTI-NODE SCRAPER ENGINE (CREX PRIMARY -> REDUNDANT FALLBACK)
+  // DIRECT STRIKE SCRAPER ENGINE
   // =========================================================================
   try {
     let htmlAcquired = false; let timestampBuster = Date.now();
-    let crexUrl = req.query.url || "";
 
-    // NODE 1: CREX DEEP HUNT
-    if (!crexUrl) {
-      const crexNodes = [`https://crex.live/fixtures/match-list`, `https://crex.live/`];
-      for (let node of crexNodes) {
-        try {
-          const cxRes = await axios.get(`${node}?_t=${timestampBuster}`, { headers, timeout: 3500 });
-          // Bruteforce search all hrefs directly from raw text to bypass DOM hiding
-          let hrefs = [...cxRes.data.matchAll(/href="([^"]+)"/gi)];
-          for (let m of hrefs) {
-            let href = m[1].toLowerCase();
-            if ((href.includes('gt') || href.includes('gujarat')) && (href.includes('rcb') || href.includes('bengaluru') || href.includes('bangalore'))) {
-              if (href.includes('score') || href.includes('match') || href.includes('fixture')) {
-                 crexUrl = href.startsWith('http') ? href : 'https://crex.live' + href;
-                 break;
-              }
-            }
-          }
-          if (crexUrl) break;
-        } catch (e) { console.log("CREX Node bypassed."); }
-      }
-    }
-
-    if (crexUrl) {
-      try {
-        let fetchUrl = crexUrl.includes('?') ? `${crexUrl}&_t=${timestampBuster}` : `${crexUrl}?_t=${timestampBuster}`;
-        const cRes = await axios.get(fetchUrl, { headers, timeout: 4000 });
-        $ = cheerio.load(cRes.data); $('script, style, noscript').remove();
-        pageTitle = $('title').text() || ""; 
-        
-        let rawHtml = $('body').html() || "";
-        rawHtml = rawHtml.replace(/<svg[^>]*>.*?<\/svg>/gi, ' *BAT* ');
-        rawHtml = rawHtml.replace(/<img[^>]*(bat|striker|active)[^>]*>/gi, ' *BAT* ');
-        rawHtml = rawHtml.replace(/class="[^"]*(active)[^"]*"/gi, ' *BAT* ');
-        rawHtml = rawHtml.replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&');
-        
-        bodyText = rawHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-        payload.source_url = "CREX (Tier 1 Node)"; htmlAcquired = true;
-      } catch (e) { console.log("CREX Payload extraction failed."); }
-    }
-
-    // NODE 2: SILENT REDUNDANT FALLBACK (Activates if CREX blocks Vercel IPs during traffic surge)
-    if (!htmlAcquired) {
-      try {
-        let cbUrl = "";
-        const cbNodes = [`https://m.cricbuzz.com/cricket-match/live-scores`, `https://m.cricbuzz.com/`];
-        for (let node of cbNodes) {
-          const res = await axios.get(`${node}?_t=${timestampBuster}`, { headers, timeout: 3500 });
-          let hrefs = [...res.data.matchAll(/href="([^"]+)"/gi)];
-          for (let m of hrefs) {
-            let href = m[1].toLowerCase();
-            if ((href.includes('gt') || href.includes('gujarat')) && (href.includes('rcb') || href.includes('bengaluru') || href.includes('bangalore'))) {
-               cbUrl = m[1].startsWith('http') ? m[1] : 'https://m.cricbuzz.com' + m[1];
-               break;
-            }
-          }
-          if (cbUrl) break;
-        }
-
-        if (cbUrl) {
-          cbUrl = cbUrl.replace('www.', 'm.').replace('/live-cricket-scorecard/', '/cricket-scores/');
-          let fetchUrl = cbUrl.includes('?') ? `${cbUrl}&_t=${timestampBuster}` : `${cbUrl}?_t=${timestampBuster}`;
-          const cbRes = await axios.get(fetchUrl, { headers, timeout: 4000 });
-          $ = cheerio.load(cbRes.data); $('script, style, noscript').remove();
-          pageTitle = $('title').text() || ""; 
-          let rawHtml = $('body').html() || "";
-          rawHtml = rawHtml.replace(/<svg[^>]*>.*?<\/svg>/gi, ' *BAT* ');
-          rawHtml = rawHtml.replace(/<img[^>]*(bat|striker|active)[^>]*>/gi, ' *BAT* ');
-          rawHtml = rawHtml.replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&');
-          bodyText = rawHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-          payload.source_url = "Redundant Alt-Node"; htmlAcquired = true;
-        }
-      } catch (e) { }
-    }
+    try {
+      let fetchUrl = targetUrl.includes('?') ? `${targetUrl}&_t=${timestampBuster}` : `${targetUrl}?_t=${timestampBuster}`;
+      const cRes = await axios.get(fetchUrl, { headers, timeout: 5000 });
+      $ = cheerio.load(cRes.data); $('script, style, noscript').remove();
+      pageTitle = $('title').text() || ""; 
+      
+      let rawHtml = $('body').html() || "";
+      rawHtml = rawHtml.replace(/<svg[^>]*>.*?<\/svg>/gi, ' *BAT* ');
+      rawHtml = rawHtml.replace(/<img[^>]*(bat|striker|active)[^>]*>/gi, ' *BAT* ');
+      rawHtml = rawHtml.replace(/class="[^"]*(active)[^"]*"/gi, ' *BAT* ');
+      rawHtml = rawHtml.replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&');
+      
+      bodyText = rawHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      payload.source_url = "CREX (Direct Target Node)"; htmlAcquired = true;
+    } catch (e) { console.log("Direct Node Blocked."); }
 
     payload.fetch_code = htmlAcquired ? "UREKHA" : "OH";
 
     if (!htmlAcquired) {
-      payload.status = "UPLINK FAILED: ALL NODES BLOCKED"; payload.title = "SYSTEM FAULT";
+      payload.status = "UPLINK FAILED: DIRECT TARGET BLOCKED"; payload.title = "SYSTEM FAULT";
       return res.status(200).json({ success: true, match_info: payload });
     }
 
@@ -308,7 +258,7 @@ module.exports = async function (req, res) {
       } catch (e) { payload.last_over = ["E", "R", "R", "O", "R", "!"]; }
 
       // ==========================================================
-      // ODDS SNIPER & 100% UPTIME PROBABILITY ENGINE 
+      // ODDS SNIPER & PROBABILITY ENGINE
       // ==========================================================
       try {
         if (payload.live_score.includes('/')) {
@@ -341,7 +291,7 @@ module.exports = async function (req, res) {
               else payload.prediction = `INNINGS ENDING`;
             }
 
-            // Mathematical Win Probability Engine (Guarantees engine stays alive)
+            // 100% Uptime Logic: Mathematical Win Probability
             let batTeam = payload.live_score.split(' ')[0] || "GT";
             let bowlTeam = (batTeam === "GT") ? "RCB" : "GT"; 
             let batWinProb = 50;
@@ -372,7 +322,7 @@ module.exports = async function (req, res) {
               favTeam = crexOdds.team; favPaise = crexOdds.back; layPaise = crexOdds.lay;
               displayOdds = `${favPaise}-${layPaise}`; isRealMarket = true;
             } else {
-              // 100% AI Uptime Math Fallback
+              // Mathematical Fallback
               favTeam = batWinProb > 50 ? batTeam : bowlTeam;
               maxProb = Math.max(batWinProb, 100 - batWinProb);
               favPaise = Math.max(1, Math.round(((100 - maxProb) / maxProb) * 100));
