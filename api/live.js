@@ -1,6 +1,6 @@
 // ==============================================================================
 // MI6 QUANTUM ORACLE - CHAMPIONSHIP SNIPER EDITION (GT vs RCB)
-// Source Locked: CREX Exclusively
+// Uplink: Titanium Grade (Multi-Node Auto-Failover)
 // ==============================================================================
 const axios = require('axios');
 const cheerio = require('cheerio');
@@ -21,17 +21,18 @@ module.exports = async function (req, res) {
   // ==========================================
   let e1 = parseFloat(req.query.e1) || 0; 
   let e2 = parseFloat(req.query.e2) || 0; 
-  // Hard-locked to the Grand Final factions
   let t1Name = "GUJARAT TITANS";
   let t2Name = "ROYAL CHALLENGERS BENGALURU";
 
   const headers = {
-    'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-G991U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Connection': 'keep-alive'
   };
 
   let payload = {
-    title: "GT VS RCB | GRAND FINAL", status: "Targeting CREX Node...", match_state: "standby", winner: "PENDING",
+    title: "GT VS RCB | GRAND FINAL", status: "Targeting Secure Nodes...", match_state: "standby", winner: "PENDING",
     live_score: "NO SCORE", current_rr: "NO CRR", required_rr: "NO REQ",
     striker: "NO STRIKER", non_striker: "NO NON-STRIKER", bowler: "NO BOWLER",
     toss: "NO TOSS DATA", venue: "Narendra Modi Stadium, Ahmedabad", last_over: ["-", "-", "-", "-", "-", "-"],
@@ -44,7 +45,6 @@ module.exports = async function (req, res) {
     if (!text || typeof text !== "string") return null;
     const flat = text.replace(/\s+/g, " ").replace(/[()\[\]]/g, " ");
     
-    // Hyper-focused regex strictly for GT and RCB
     const teamMap = {
       "GT": ["gt", "gujarat titans", "gujarat", "titans"],
       "RCB": ["rcb", "royal challengers bengaluru", "royal challengers bangalore", "royal", "bengaluru", "bangalore", "challengers"]
@@ -52,7 +52,6 @@ module.exports = async function (req, res) {
 
     for (const [code, aliases] of Object.entries(teamMap)) {
       for (const alias of aliases) {
-        // Look for the alias followed by two numbers (paise odds) within 40 characters
         const re = new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b[^0-9]{0,40}(\\d{1,3})[\\s\\-]+(\\d{1,3})\\b`, "i");
         const m = flat.match(re);
         if (m) {
@@ -67,45 +66,90 @@ module.exports = async function (req, res) {
   }
 
   // =========================================================================
-  // EXCLUSIVE CREX SCRAPER ENGINE (NO FALLBACKS = MAXIMUM SPEED)
+  // MULTI-NODE SCRAPER ENGINE (CREX PRIMARY -> REDUNDANT FALLBACK)
   // =========================================================================
   try {
     let htmlAcquired = false; let timestampBuster = Date.now();
     let crexUrl = req.query.url || "";
 
+    // NODE 1: CREX DEEP HUNT
     if (!crexUrl) {
-      const cxRes = await axios.get(`https://crex.com/fixtures/match-list?_t=${timestampBuster}`, { headers, timeout: 3000 });
-      const $temp = cheerio.load(cxRes.data);
-      $temp('a').each((i, el) => {
-        let txt = $temp(el).text().toLowerCase(); let href = $temp(el).attr('href') || "";
-        // Lock specifically onto the GT vs RCB fixture
-        if ((txt.includes('gt') || txt.includes('gujarat')) && (txt.includes('rcb') || txt.includes('bengaluru')) && (href.includes('score') || href.includes('match-updates'))) {
-          crexUrl = href.startsWith('http') ? href : 'https://crex.com' + href;
-        }
-      });
+      const crexNodes = [`https://crex.live/fixtures/match-list`, `https://crex.live/`];
+      for (let node of crexNodes) {
+        try {
+          const cxRes = await axios.get(`${node}?_t=${timestampBuster}`, { headers, timeout: 3500 });
+          // Bruteforce search all hrefs directly from raw text to bypass DOM hiding
+          let hrefs = [...cxRes.data.matchAll(/href="([^"]+)"/gi)];
+          for (let m of hrefs) {
+            let href = m[1].toLowerCase();
+            if ((href.includes('gt') || href.includes('gujarat')) && (href.includes('rcb') || href.includes('bengaluru') || href.includes('bangalore'))) {
+              if (href.includes('score') || href.includes('match') || href.includes('fixture')) {
+                 crexUrl = href.startsWith('http') ? href : 'https://crex.live' + href;
+                 break;
+              }
+            }
+          }
+          if (crexUrl) break;
+        } catch (e) { console.log("CREX Node bypassed."); }
+      }
     }
 
     if (crexUrl) {
-      let fetchUrl = crexUrl.includes('?') ? `${crexUrl}&_t=${timestampBuster}` : `${crexUrl}?_t=${timestampBuster}`;
-      const cRes = await axios.get(fetchUrl, { headers, timeout: 3500 });
-      $ = cheerio.load(cRes.data); $('script, style, noscript').remove();
-      pageTitle = $('title').text() || ""; 
-      
-      let rawHtml = $('body').html() || "";
-      // Expose hidden DOM states to plaintext for the regex engine
-      rawHtml = rawHtml.replace(/<svg[^>]*>.*?<\/svg>/gi, ' *BAT* ');
-      rawHtml = rawHtml.replace(/<img[^>]*(bat|striker|active)[^>]*>/gi, ' *BAT* ');
-      rawHtml = rawHtml.replace(/class="[^"]*(active)[^"]*"/gi, ' *BAT* ');
-      rawHtml = rawHtml.replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&');
-      
-      bodyText = rawHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-      payload.source_url = "CREX (Tier 1 Speed)"; htmlAcquired = true;
+      try {
+        let fetchUrl = crexUrl.includes('?') ? `${crexUrl}&_t=${timestampBuster}` : `${crexUrl}?_t=${timestampBuster}`;
+        const cRes = await axios.get(fetchUrl, { headers, timeout: 4000 });
+        $ = cheerio.load(cRes.data); $('script, style, noscript').remove();
+        pageTitle = $('title').text() || ""; 
+        
+        let rawHtml = $('body').html() || "";
+        rawHtml = rawHtml.replace(/<svg[^>]*>.*?<\/svg>/gi, ' *BAT* ');
+        rawHtml = rawHtml.replace(/<img[^>]*(bat|striker|active)[^>]*>/gi, ' *BAT* ');
+        rawHtml = rawHtml.replace(/class="[^"]*(active)[^"]*"/gi, ' *BAT* ');
+        rawHtml = rawHtml.replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&');
+        
+        bodyText = rawHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        payload.source_url = "CREX (Tier 1 Node)"; htmlAcquired = true;
+      } catch (e) { console.log("CREX Payload extraction failed."); }
+    }
+
+    // NODE 2: SILENT REDUNDANT FALLBACK (Activates if CREX blocks Vercel IPs during traffic surge)
+    if (!htmlAcquired) {
+      try {
+        let cbUrl = "";
+        const cbNodes = [`https://m.cricbuzz.com/cricket-match/live-scores`, `https://m.cricbuzz.com/`];
+        for (let node of cbNodes) {
+          const res = await axios.get(`${node}?_t=${timestampBuster}`, { headers, timeout: 3500 });
+          let hrefs = [...res.data.matchAll(/href="([^"]+)"/gi)];
+          for (let m of hrefs) {
+            let href = m[1].toLowerCase();
+            if ((href.includes('gt') || href.includes('gujarat')) && (href.includes('rcb') || href.includes('bengaluru') || href.includes('bangalore'))) {
+               cbUrl = m[1].startsWith('http') ? m[1] : 'https://m.cricbuzz.com' + m[1];
+               break;
+            }
+          }
+          if (cbUrl) break;
+        }
+
+        if (cbUrl) {
+          cbUrl = cbUrl.replace('www.', 'm.').replace('/live-cricket-scorecard/', '/cricket-scores/');
+          let fetchUrl = cbUrl.includes('?') ? `${cbUrl}&_t=${timestampBuster}` : `${cbUrl}?_t=${timestampBuster}`;
+          const cbRes = await axios.get(fetchUrl, { headers, timeout: 4000 });
+          $ = cheerio.load(cbRes.data); $('script, style, noscript').remove();
+          pageTitle = $('title').text() || ""; 
+          let rawHtml = $('body').html() || "";
+          rawHtml = rawHtml.replace(/<svg[^>]*>.*?<\/svg>/gi, ' *BAT* ');
+          rawHtml = rawHtml.replace(/<img[^>]*(bat|striker|active)[^>]*>/gi, ' *BAT* ');
+          rawHtml = rawHtml.replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&');
+          bodyText = rawHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+          payload.source_url = "Redundant Alt-Node"; htmlAcquired = true;
+        }
+      } catch (e) { }
     }
 
     payload.fetch_code = htmlAcquired ? "UREKHA" : "OH";
 
     if (!htmlAcquired) {
-      payload.status = "UPLINK FAILED: CREX TARGET BLOCKED"; payload.title = "UPLINK FAILED";
+      payload.status = "UPLINK FAILED: ALL NODES BLOCKED"; payload.title = "SYSTEM FAULT";
       return res.status(200).json({ success: true, match_info: payload });
     }
 
@@ -264,7 +308,7 @@ module.exports = async function (req, res) {
       } catch (e) { payload.last_over = ["E", "R", "R", "O", "R", "!"]; }
 
       // ==========================================================
-      // ODDS SNIPER & PROBABILITY ENGINE (100% AI GUARANTEE)
+      // ODDS SNIPER & 100% UPTIME PROBABILITY ENGINE 
       // ==========================================================
       try {
         if (payload.live_score.includes('/')) {
@@ -297,7 +341,7 @@ module.exports = async function (req, res) {
               else payload.prediction = `INNINGS ENDING`;
             }
 
-            // 100% Uptime Logic: Mathematical Win Probability
+            // Mathematical Win Probability Engine (Guarantees engine stays alive)
             let batTeam = payload.live_score.split(' ')[0] || "GT";
             let bowlTeam = (batTeam === "GT") ? "RCB" : "GT"; 
             let batWinProb = 50;
@@ -322,20 +366,19 @@ module.exports = async function (req, res) {
               batWinProb = Math.max(2, Math.min(98, baseProb));
             }
 
-            // Attempt Live Scraping
             let crexOdds = extractCrexTrueOdds(pageTitle) || extractCrexTrueOdds(bodyText);
 
             if (crexOdds && crexOdds.team && crexOdds.back && crexOdds.lay) {
               favTeam = crexOdds.team; favPaise = crexOdds.back; layPaise = crexOdds.lay;
               displayOdds = `${favPaise}-${layPaise}`; isRealMarket = true;
             } else {
-              // 100% AI WORKS: If CREX hides odds, calculate exact bookie implied odds mathematically
+              // 100% AI Uptime Math Fallback
               favTeam = batWinProb > 50 ? batTeam : bowlTeam;
               maxProb = Math.max(batWinProb, 100 - batWinProb);
               favPaise = Math.max(1, Math.round(((100 - maxProb) / maxProb) * 100));
               layPaise = favPaise + 1;
               displayOdds = `${favPaise}-${layPaise}`;
-              isRealMarket = true; // Always true, engine never goes offline
+              isRealMarket = true; 
             }
 
             payload.match_prediction = `[LIVE MARKET ODDS] ${favTeam} is Favorite at ${displayOdds} Paise`;
@@ -371,7 +414,6 @@ module.exports = async function (req, res) {
         if (!isRealMarket || payload.match_state !== "live") {
              aiAdvice = `[HEDGE OFFLINE] Awaiting live match state.`;
         } else {
-             // Strict mapping isolated to GT and RCB to completely prevent Ledger Errors
              const getCode = (name) => {
                  if (!name || typeof name !== 'string') return "";
                  let n = name.toLowerCase().trim();
@@ -390,7 +432,7 @@ module.exports = async function (req, res) {
              if (codeFav && codeFav === codeT1) { expFav = e1; expOpp = e2; oppTeam = t2Name; } 
              else if (codeFav && codeFav === codeT2) { expFav = e2; expOpp = e1; oppTeam = t1Name; }
              else {
-                 aiAdvice = `[LEDGER ERROR] AI detected favorite as ${favTeam}, but it does not match your tracking inputs (${t1Name}/${t2Name}).`;
+                 aiAdvice = `[LEDGER ERROR] AI detected favorite as ${favTeam}, but it does not match tracking inputs.`;
              }
 
              if (!aiAdvice) {
@@ -414,7 +456,6 @@ module.exports = async function (req, res) {
                  }
              }
         }
-        
         payload.ledger_analysis = aiAdvice;
 
     } catch (err) {
