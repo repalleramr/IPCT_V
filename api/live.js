@@ -38,7 +38,7 @@ module.exports = async function (req, res) {
     prediction: "AI OFFLINE", match_prediction: "", ledger_analysis: "AWAITING TELEMETRY", source_url: "Hunting...", fetch_code: "OH"
   };
 
-  let pageTitle = ""; let bodyText = ""; let espnMatchData = null; let $ = null;
+  let pageTitle = ""; let bodyText = ""; let espnMatchData = null; let $ = null; let fullHtml = "";
 
   const teamAliases = {
     "chennai": ["csk", "chennai", "super kings"], "lucknow": ["lsg", "lucknow", "super giants"],
@@ -73,40 +73,40 @@ module.exports = async function (req, res) {
 
   function escapeRegExp(str) { return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
+  // [UPGRADED] Advanced Sniper for Crex Odds Integration
   function extractCrexTrueOdds(text) {
     if (!text || typeof text !== "string") return null;
-    const flat = text.replace(/\s+/g, " ").replace(/[()\[\]]/g, " ");
+    // Flatten arrays, objects, HTML tags, and JSON formatting to plain spaces
+    const flat = text.replace(/[()\[\]{}",':;]/g, " ").replace(/\s+/g, " ");
+    
     const teamMap = {
-      "csk": ["csk", "chennai super kings", "chennai", "super kings"],
-      "lsg": ["lsg", "lucknow super giants", "lucknow", "super giants"],
-      "mi": ["mi", "mumbai indians", "mumbai", "indians"],
-      "pbks": ["pbks", "punjab kings", "punjab", "kings"],
-      "dc": ["dc", "delhi capitals", "delhi", "capitals"],
-      "gt": ["gt", "gujarat titans", "gujarat", "titans"],
-      "kkr": ["kkr", "kolkata knight riders", "kolkata", "knight riders"],
-      "rr": ["rr", "rajasthan royals", "rajasthan", "royals"],
-      "rcb": ["rcb", "royal challengers bengaluru", "royal challengers bangalore", "royal", "bengaluru", "bangalore", "challengers"],
-      "srh": ["srh", "sunrisers hyderabad", "sunrisers", "hyderabad"]
+      "CSK": ["csk", "chennai super kings", "chennai", "super kings"],
+      "LSG": ["lsg", "lucknow super giants", "lucknow", "super giants"],
+      "MI": ["mi", "mumbai indians", "mumbai", "indians"],
+      "PBKS": ["pbks", "punjab kings", "punjab", "kings"],
+      "DC": ["dc", "delhi capitals", "delhi", "capitals"],
+      "GT": ["gt", "gujarat titans", "gujarat", "titans"],
+      "KKR": ["kkr", "kolkata knight riders", "kolkata", "knight riders"],
+      "RR": ["rr", "rajasthan royals", "rajasthan", "royals"],
+      "RCB": ["rcb", "royal challengers bengaluru", "royal challengers bangalore", "royal", "bengaluru", "bangalore", "challengers"],
+      "SRH": ["srh", "sunrisers hyderabad", "sunrisers", "hyderabad"]
     };
 
-    for (const code of Object.keys(teamMap)) {
-      const re = new RegExp(`\\b${code.toUpperCase()}\\b[^0-9]{0,40}(\\d{1,3})[\\s\\-]+(\\d{1,3})\\b`, "i");
-      const m = flat.match(re);
-      if (m) {
-        const a = parseInt(m[1], 10); const b = parseInt(m[2], 10);
-        if (a > 0 && b > 0 && a <= 150 && b <= 150 && Math.abs(a - b) <= 4) {
-          return { team: code.toUpperCase(), back: Math.min(a, b), lay: Math.max(a, b), raw: m[0] };
-        }
-      }
-    }
     for (const [code, aliases] of Object.entries(teamMap)) {
-      for (const alias of aliases) {
-        const re = new RegExp(`\\b${escapeRegExp(alias)}\\b[^0-9]{0,40}(\\d{1,3})[\\s\\-]+(\\d{1,3})\\b`, "i");
+      const allNames = [code.toLowerCase(), ...aliases];
+      for (const alias of allNames) {
+        // Allows up to 250 characters of scores/DOM junk between Team Name and Market Odds
+        const re = new RegExp(`\\b${escapeRegExp(alias)}\\b.{0,250}?\\b(\\d{1,3})[\\s\\-\\/|]+(\\d{1,3})\\b`, "i");
         const m = flat.match(re);
         if (m) {
-          const a = parseInt(m[1], 10); const b = parseInt(m[2], 10);
-          if (a > 0 && b > 0 && a <= 150 && b <= 150 && Math.abs(a - b) <= 4) {
-            return { team: code.toUpperCase(), back: Math.min(a, b), lay: Math.max(a, b), raw: m[0] };
+          const a = parseInt(m[1], 10); 
+          const b = parseInt(m[2], 10);
+          // Indian Market Odds Validation (Spread Tolerance extended to 6)
+          if (a >= 1 && b >= 1 && a <= 150 && b <= 150) {
+            const diff = Math.abs(a - b);
+            if (diff >= 1 && diff <= 6) {
+              return { team: code, back: Math.min(a, b), lay: Math.max(a, b), raw: m[0] };
+            }
           }
         }
       }
@@ -124,7 +124,7 @@ module.exports = async function (req, res) {
   }
 
   // =========================================================================
-  // CORE SCRAPER ENGINE (YOUR CODE EXACTLY PRESERVED)
+  // CORE SCRAPER ENGINE
   // =========================================================================
   try {
     let htmlAcquired = false; let timestampBuster = Date.now();
@@ -145,6 +145,9 @@ module.exports = async function (req, res) {
         if (crexUrl) {
           let fetchUrl = crexUrl.includes('?') ? `${crexUrl}&_t=${timestampBuster}` : `${crexUrl}?_t=${timestampBuster}`;
           const cRes = await axios.get(fetchUrl, { headers, timeout: 3000 });
+          
+          fullHtml = cRes.data; // Capture raw HTML including JSON state BEFORE stripping
+          
           $ = cheerio.load(cRes.data); $('script, style, noscript').remove();
           pageTitle = $('title').text() || ""; 
           let rawHtml = $('body').html() || "";
@@ -177,6 +180,9 @@ module.exports = async function (req, res) {
           cbUrl = cbUrl.replace('www.', 'm.').replace('/live-cricket-scorecard/', '/cricket-scores/');
           let fetchUrl = cbUrl.includes('?') ? `${cbUrl}&_t=${timestampBuster}` : `${cbUrl}?_t=${timestampBuster}`;
           const cbRes = await axios.get(fetchUrl, { headers, timeout: 3500 });
+          
+          fullHtml = cbRes.data;
+
           $ = cheerio.load(cbRes.data); $('script, style, noscript').remove();
           pageTitle = $('title').text() || ""; 
           let rawHtml = $('body').html() || "";
@@ -446,23 +452,37 @@ module.exports = async function (req, res) {
 
             let crexOdds = null;
             if (payload.source_url && payload.source_url.toLowerCase().includes("crex")) {
-              crexOdds = extractCrexTrueOdds(pageTitle) || extractCrexTrueOdds(bodyText);
+              // Attempt 1: Standard Extraction from body text and title
+              crexOdds = extractCrexTrueOdds(bodyText) || extractCrexTrueOdds(pageTitle);
+              
+              // Attempt 2 (CRITICAL FIX): If odds are masked inside Next.js JSON state, scan full HTML
+              if (!crexOdds && fullHtml) {
+                  crexOdds = extractCrexTrueOdds(fullHtml);
+              }
             }
 
             if (crexOdds && crexOdds.team && crexOdds.back && crexOdds.lay) {
               favTeam = crexOdds.team; favPaise = crexOdds.back; layPaise = crexOdds.lay;
               displayOdds = `${favPaise}-${layPaise}`; isRealMarket = true;
             } else {
+              // Generic Upgraded Fallback
               let teamsPattern = Object.keys(teamMap).join('|');
-              let oddsRegex = new RegExp(`(${teamsPattern})[\\s\\W]*?(\\d{1,3})\\s+(\\d{1,3})\\b(?!\\s*[-/\\(\\)])`, 'i');
-              let numViewMatch = bodyText.match(oddsRegex);
+              let oddsRegex = new RegExp(`\\b(${teamsPattern})\\b.{0,250}?\\b(\\d{1,3})[\\s\\-\\/|]+(\\d{1,3})\\b`, 'i');
+              
+              let numViewMatch = bodyText.match(oddsRegex) || (fullHtml ? fullHtml.replace(/[()\[\]{}",':;]/g, " ").replace(/\s+/g, " ").match(oddsRegex) : null);
+              
               if (numViewMatch && numViewMatch[1]) {
                 let matchedTeam = numViewMatch[1].toLowerCase();
                 let p1 = parseInt(numViewMatch[2]); let p2 = parseInt(numViewMatch[3]);
-                if (Math.abs(p1 - p2) <= 3 && p1 > 0 && p2 < 100) {
-                  favTeam = teamMap[matchedTeam] || matchedTeam.toUpperCase();
-                  favPaise = p1; layPaise = p2; displayOdds = `${favPaise}-${layPaise}`;
-                  isRealMarket = true;
+                
+                if (p1 >= 1 && p2 >= 1 && p1 <= 150 && p2 <= 150) {
+                   const diff = Math.abs(p1 - p2);
+                   if (diff >= 1 && diff <= 6) {
+                      favTeam = teamMap[matchedTeam] || matchedTeam.toUpperCase();
+                      favPaise = Math.min(p1, p2); layPaise = Math.max(p1, p2); 
+                      displayOdds = `${favPaise}-${layPaise}`;
+                      isRealMarket = true;
+                   }
                 }
               }
             }
@@ -478,11 +498,9 @@ module.exports = async function (req, res) {
 
     // =========================================================================
     // [ADD-ON: AI THINKING LEVELS (INTUITION + SHADOW TRADER + HEDGE ENGINE)]
-    // Safely appended to the exact working code. Does not interrupt core tasks.
     // =========================================================================
     try {
         if (payload.match_state === "live") {
-            // --- 1. HUMAN INTUITION (Pitch & Momentum) ---
             let totalBalls = 0, runs = 0, wkts = 0, crr = 8.5, recentRR = 8.5;
             let scoreMatchClean = payload.live_score.match(/(\d+)[\/\-](\d+)\s*\(?([\d\.]+)\)?/);
             let batTeam = payload.live_score.split(' ')[0] || "Batting Team";
@@ -518,7 +536,6 @@ module.exports = async function (req, res) {
                 else { momentum = "Standard Accumulation"; }
             } else { momentum = "Powerplay Settling"; }
 
-            // --- 2. SHADOW TRADER (Contrarian Value) ---
             let shadowAdvice = "";
             let isChasePhase = (payload.required_rr && !payload.required_rr.includes("REQ") && payload.required_rr !== "1st Innings" && payload.required_rr !== "Error");
             let rrrVal = isChasePhase ? parseFloat(payload.required_rr) : 0;
@@ -535,7 +552,6 @@ module.exports = async function (req, res) {
 
             payload.match_prediction += `\n[LIVE PITCH] ${livePitchRead} (Assessing conditions...)\n[MOMENTUM] ${momentum}${shadowAdvice}`;
 
-            // --- 3. HARDENED QUANTUM HEDGE ENGINE ---
             let hedgeAdvice = "";
             let valE1 = isNaN(e1) ? 0 : e1;
             let valE2 = isNaN(e2) ? 0 : e2;
@@ -547,7 +563,6 @@ module.exports = async function (req, res) {
             } else {
                 let expFav = 0; let expOpp = 0; let oppTeam = "Opponent";
 
-                // Smart Mapping to prevent Ledger Error (Catches abbreviations)
                 let t1Safe = t1Name.substring(0, 3);
                 let t2Safe = t2Name.substring(0, 3);
                 let isT1Fav = (favTeam === t1Name || favTeam.includes(t1Safe) || t1Safe.includes(favTeam) || t1A.includes(favTeam.toLowerCase()));
@@ -582,7 +597,6 @@ module.exports = async function (req, res) {
             payload.ledger_analysis = hedgeAdvice;
         }
     } catch (err) {
-        // If it fails, output exactly WHY it failed so we can fix it next time
         payload.ledger_analysis = "Engine Fault in Hedge Calculation: " + err.message;
     }
 
