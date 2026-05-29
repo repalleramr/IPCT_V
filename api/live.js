@@ -77,7 +77,7 @@ module.exports = async function (req, res) {
   function extractCrexTrueOdds(text) {
     if (!text || typeof text !== "string") return null;
     // Flatten arrays, objects, HTML tags, and JSON formatting to plain spaces
-    const flat = text.replace(/[()\[\]{}",':;]/g, " ").replace(/\s+/g, " ");
+    const flat = text.replace(/[()\[\]{}",':;<>]/g, " ").replace(/\s+/g, " ");
     
     const teamMap = {
       "CSK": ["csk", "chennai super kings", "chennai", "super kings"],
@@ -95,16 +95,20 @@ module.exports = async function (req, res) {
     for (const [code, aliases] of Object.entries(teamMap)) {
       const allNames = [code.toLowerCase(), ...aliases];
       for (const alias of allNames) {
-        // Allows up to 250 characters of scores/DOM junk between Team Name and Market Odds
-        const re = new RegExp(`\\b${escapeRegExp(alias)}\\b.{0,250}?\\b(\\d{1,3})[\\s\\-\\/|]+(\\d{1,3})\\b`, "i");
+        // Tolerates up to 300 characters of junk, checks for whole numbers or decimals
+        const re = new RegExp(`${escapeRegExp(alias)}.{0,300}?(?:[^\\d.]|^)(\\d{1,3}(?:\\.\\d{1,2})?)[\\s\\-\\/|]+(\\d{1,3}(?:\\.\\d{1,2})?)(?:[^\\d.]|$)`, "i");
         const m = flat.match(re);
         if (m) {
-          const a = parseInt(m[1], 10); 
-          const b = parseInt(m[2], 10);
-          // Indian Market Odds Validation (Spread Tolerance extended to 6)
+          let a = parseFloat(m[1]); 
+          let b = parseFloat(m[2]);
+          
+          // Convert decimal odds (e.g., 1.45) to Indian paise format (45)
+          if (a > 1 && a < 3) a = Math.round((a - 1) * 100);
+          if (b > 1 && b < 3) b = Math.round((b - 1) * 100);
+
           if (a >= 1 && b >= 1 && a <= 150 && b <= 150) {
             const diff = Math.abs(a - b);
-            if (diff >= 1 && diff <= 6) {
+            if (diff >= 1 && diff <= 10) { // Spread Tolerance extended to 10 for volatile markets
               return { team: code, back: Math.min(a, b), lay: Math.max(a, b), raw: m[0] };
             }
           }
@@ -467,9 +471,9 @@ module.exports = async function (req, res) {
             } else {
               // Generic Upgraded Fallback
               let teamsPattern = Object.keys(teamMap).join('|');
-              let oddsRegex = new RegExp(`\\b(${teamsPattern})\\b.{0,250}?\\b(\\d{1,3})[\\s\\-\\/|]+(\\d{1,3})\\b`, 'i');
+              let oddsRegex = new RegExp(`\\b(${teamsPattern})\\b.{0,300}?\\b(\\d{1,3})[\\s\\-\\/|]+(\\d{1,3})\\b`, 'i');
               
-              let numViewMatch = bodyText.match(oddsRegex) || (fullHtml ? fullHtml.replace(/[()\[\]{}",':;]/g, " ").replace(/\s+/g, " ").match(oddsRegex) : null);
+              let numViewMatch = bodyText.match(oddsRegex) || (fullHtml ? fullHtml.replace(/[()\[\]{}",':;<>]/g, " ").replace(/\s+/g, " ").match(oddsRegex) : null);
               
               if (numViewMatch && numViewMatch[1]) {
                 let matchedTeam = numViewMatch[1].toLowerCase();
@@ -477,7 +481,7 @@ module.exports = async function (req, res) {
                 
                 if (p1 >= 1 && p2 >= 1 && p1 <= 150 && p2 <= 150) {
                    const diff = Math.abs(p1 - p2);
-                   if (diff >= 1 && diff <= 6) {
+                   if (diff >= 1 && diff <= 10) {
                       favTeam = teamMap[matchedTeam] || matchedTeam.toUpperCase();
                       favPaise = Math.min(p1, p2); layPaise = Math.max(p1, p2); 
                       displayOdds = `${favPaise}-${layPaise}`;
@@ -501,7 +505,10 @@ module.exports = async function (req, res) {
     // =========================================================================
     try {
         if (payload.match_state === "live") {
+            // [FIXED] Variable hoisting to prevent Scope ReferenceErrors
             let totalBalls = 0, runs = 0, wkts = 0, crr = 8.5, recentRR = 8.5;
+            let recentRuns = 0, validBalls = 0, recentWicket = false; 
+            
             let scoreMatchClean = payload.live_score.match(/(\d+)[\/\-](\d+)\s*\(?([\d\.]+)\)?/);
             let batTeam = payload.live_score.split(' ')[0] || "Batting Team";
 
@@ -514,7 +521,6 @@ module.exports = async function (req, res) {
                 totalBalls = (overs * 6) + balls;
                 crr = parseFloat(payload.current_rr) || 8.5;
 
-                let recentRuns = 0; let validBalls = 0; let recentWicket = false;
                 if (Array.isArray(payload.last_over)) {
                     payload.last_over.forEach(b => {
                         if (b === 'W') { recentWicket = true; validBalls++; }
