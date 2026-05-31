@@ -1,11 +1,14 @@
 // ==============================================================================
-// LAYER 1: NETWORK PROTOCOLS & CONFIGURATION
+// MI6 QUANTUM ORACLE - DEEP PLAIN-TEXT SEGREGATION ENGINE (GT vs RCB)
+// Version: 12.0.0 (High-Fidelity Production Grid Architecture)
 // ==============================================================================
 const axios = require('axios');
 const cheerio = require('cheerio');
 
 module.exports = async function (req, res) {
-  // --- TITANIUM ANTI-CACHING HEADERS ---
+  // ============================================================================
+  // LAYER 1: NETWORK PROTOCOLS, CONFIGURATION & HEADERS
+  // ============================================================================
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -17,20 +20,15 @@ module.exports = async function (req, res) {
     return res.status(200).end();
   }
 
-  // --- HARDWIRED TARGET MATCH ENDPOINT ---
   const exactTargetUrl = "https://crex.live/cricket-live-score/gt-vs-rcb-final-indian-premier-league-2026-match-updates-11XM";
   let operationalUrl = req.query.url || exactTargetUrl;
-  
-  // Domain resolution protection layer
   operationalUrl = operationalUrl.replace('crex.com', 'crex.live');
 
-  // --- LEDGER POSITION INPUT FIELDS ---
   let exposureTeam1 = parseFloat(req.query.e1) || 0; 
   let exposureTeam2 = parseFloat(req.query.e2) || 0; 
   let teamA_StandardName = "GUJARAT TITANS";
   let teamB_StandardName = "ROYAL CHALLENGERS BENGALURU";
 
-  // --- AUTHENTIC STEALTH BROWSER HEADERS ---
   const requestHeaders = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
@@ -39,71 +37,47 @@ module.exports = async function (req, res) {
     'Cache-Control': 'no-cache'
   };
 
-  // --- BASE TELEMETRY PAYLOAD GRID ---
   let payload = {
-    title: "GT VS RCB | GRAND FINAL",
-    status: "Initializing Connection Nodes...",
-    match_state: "standby",
-    winner: "PENDING",
-    live_score: "NO SCORE",
-    current_rr: "0.00",
-    required_rr: "1st Innings",
-    striker: "NO STRIKER",
-    non_striker: "NO NON-STRIKER",
-    bowler: "NO BOWLER",
-    batter_1: "NO STRIKER",
-    batter_2: "NO NON-STRIKER",
-    bat_1: "NO STRIKER",
-    bat_2: "NO NON-STRIKER",
-    toss: "NO TOSS DATA",
-    venue: "Narendra Modi Stadium, Ahmedabad",
-    last_over: ["-", "-", "-", "-", "-", "-"],
-    prediction: "AI STANDBY",
-    match_prediction: "",
-    ledger_analysis: "AWAITING ENGINE PROCESSING",
-    source_url: "Hunting Primary Feed...",
-    fetch_code: "OH"
+    title: "GT VS RCB | GRAND FINAL", status: "Initializing Connection Nodes...", match_state: "standby", winner: "PENDING",
+    live_score: "NO SCORE", current_rr: "0.00", required_rr: "1st Innings",
+    striker: "NO STRIKER", non_striker: "NO NON-STRIKER", bowler: "NO BOWLER",
+    batter_1: "NO STRIKER", batter_2: "NO NON-STRIKER", bat_1: "NO STRIKER", bat_2: "NO NON-STRIKER",
+    toss: "NO TOSS DATA", venue: "Narendra Modi Stadium, Ahmedabad", last_over: ["-", "-", "-", "-", "-", "-"],
+    prediction: "AI STANDBY", match_prediction: "", ledger_analysis: "AWAITING ENGINE PROCESSING",
+    source_url: "CREX (Literal Structural Real-Odds Parser)", fetch_code: "OH"
   };
 
-  // Move directly to data fetching sequence loop...
   return await executeDataScrapeLayer(req, res, operationalUrl, requestHeaders, payload, exposureTeam1, exposureTeam2, teamA_StandardName, teamB_StandardName);
 };
+
 // ==============================================================================
-// LAYER 2: DEEP DOM ROW STRUCTURING ENGINE
+// LAYER 2: DEEP SPACE FLATTENING ENGINE
 // ==============================================================================
 async function executeDataScrapeLayer(req, res, targetUrl, headers, payload, e1, e2, t1Name, t2Name) {
   try {
     const timestampBuster = Date.now();
     const finalFetchUrl = targetUrl.includes('?') ? `${targetUrl}&_t=${timestampBuster}` : `${targetUrl}?_t=${timestampBuster}`;
     
-    // Core HTML retrieval sequence
     const httpResponse = await axios.get(finalFetchUrl, { headers: headers, timeout: 6000 });
     const $ = cheerio.load(httpResponse.data);
     
-    // Unmask active graphic state objects into explicitly scannable text tokens
+    // Inject custom structural markers for active batsman assets before converting to text
     $('svg, img, span, div').each(function() {
       let cssClassString = $(this).attr('class') || '';
       let inlineHtmlText = $(this).html() || '';
-      
       if (cssClassString.includes('bat') || cssClassString.includes('striker') || inlineHtmlText.includes('bat')) {
         $(this).before(' *STRIKER_ACTIVE_TOKEN* ');
       }
     });
 
-    // Structure raw document contents into clean row blocks to completely mitigate text merging
-    let isolatedHtmlBody = $('body').html() || "";
-    isolatedHtmlBody = isolatedHtmlBody.replace(/<\/(div|tr|p|li|h1|h2|h3|table|tbody|td)>/gi, ' |ROW_BOUNDARY| ');
-    
-    let sanitizedRowContent = isolatedHtmlBody.replace(/<[^>]+>/g, ' ');
-    let structuralTextRows = sanitizedRowContent.split('|ROW_BOUNDARY|')
-      .map(row => row.replace(/\s+/g, ' ').trim())
-      .filter(row => row.length > 0);
-
     let basePageTitle = $('title').text() || "";
+    let isolatedHtmlBody = $('body').html() || "";
+    
+    // Convert DOM into one uniform literal plaintext string with single space allocations
+    let cleanTextString = isolatedHtmlBody.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
     payload.fetch_code = "UREKHA";
-    payload.source_url = "CREX (Direct Row Isolated Array)";
 
-    return processMatchTelemetry(res, structuralTextRows, basePageTitle, payload, e1, e2, t1Name, t2Name);
+    return processMatchTelemetry(res, cleanTextString, basePageTitle, payload, e1, e2, t1Name, t2Name);
 
   } catch (connectionError) {
     payload.status = "UPLINK CONNECTION REJECTED";
@@ -113,88 +87,48 @@ async function executeDataScrapeLayer(req, res, targetUrl, headers, payload, e1,
     return res.status(200).json({ success: false, error: connectionError.message, match_info: payload });
   }
 }
+
 // ==============================================================================
 // LAYER 3: GAME METRICS EXTRACTOR & TELEMETRY ALIGNMENT
 // ==============================================================================
-function processMatchTelemetry(res, domRows, pageTitle, payload, e1, e2, t1Name, t2Name) {
-  let topSummaryContextBlock = domRows.slice(0, 50).join(' ');
-  let unifiedPageDataString = domRows.join(' ');
+function processMatchTelemetry(res, flatText, pageTitle, payload, e1, e2, t1Name, t2Name) {
+  // --- SCOREBOARD ENGINE ---
+  // Matches "GT 155-8 20.0" or "GT 155/8 (20.0)"
+  let scoreMatch = flatText.match(/\b(GT|RCB)\s+(\d+)[\-\/](\d+)\s*\(?([\d\.]+)\)?/i);
+  let runs = 0; let wickets = 0; let totalBalls = 0; let batTeam = "GT"; let oversString = "0.0";
 
-  // --- RESOLVE LIVE STATE SYSTEM (ANTI-GHOST RECORD BLOCK) ---
-  let statusTextElement = "";
-  let statusHtmlSelection = cheerio.load(domRows.join(' '));
-  
-  // Extract explicit card statements matching context indicators
-  for (let row of domRows.slice(0, 40)) {
-    let lowerRow = row.toLowerCase();
-    if (lowerRow.includes('won by') || lowerRow.includes('opt to') || lowerRow.includes('need') || lowerRow.includes('choosed')) {
-      statusTextElement = row;
-      break;
-    }
-  }
-  
-  payload.status = statusTextElement || "Match Active Telemetry Engine Running";
-  let statusTextLowercase = payload.status.toLowerCase();
-
-  // Primary live score pattern tracker
-  let liveScoreRegexPattern = /\b(GT|RCB)\s+(\d+)[\/\-](\d+)\s*\(?([\d\.]+)\)?/i;
-  let scoreElementFound = false;
-  let activeInningsBattingTeam = "GT";
-  let liveInningsRuns = 0;
-  let liveInningsWickets = 0;
-  let activeOversCompletedString = "0.0";
-  let totalBallsBowledCount = 0;
-
-  for (let row of domRows) {
-    let coreScoreMatch = row.match(liveScoreRegexPattern);
-    if (coreScoreMatch) {
-      activeInningsBattingTeam = coreScoreMatch[1].toUpperCase();
-      liveInningsRuns = parseInt(coreScoreMatch[2]);
-      liveInningsWickets = parseInt(coreScoreMatch[3]);
-      activeOversCompletedString = coreScoreMatch[4];
-      
-      let oversSplitArray = activeOversCompletedString.split('.');
-      let integerOvers = parseInt(oversSplitArray[0]) || 0;
-      let fractionalBalls = parseInt(oversSplitArray[1]) || 0;
-      totalBallsBowledCount = (integerOvers * 6) + fractionalBalls;
-
-      payload.live_score = `${activeInningsBattingTeam} ${liveInningsRuns}/${liveInningsWickets} (${activeOversCompletedString})`;
-      scoreElementFound = true;
-      break;
-    }
-  }
-
-  // Backup scorecard evaluation
-  if (!scoreElementFound) {
-    let fallbackTitleScoreMatch = pageTitle.match(/(GT|RCB)\s*(\d+)[\/\-](\d+)\s*\(?([\d\.]+)\)?/i);
-    if (fallbackTitleScoreMatch) {
-      activeInningsBattingTeam = fallbackTitleScoreMatch[1].toUpperCase();
-      liveInningsRuns = parseInt(fallbackTitleScoreMatch[2]);
-      liveInningsWickets = parseInt(fallbackTitleScoreMatch[3]);
-      activeOversCompletedString = fallbackTitleScoreMatch[4];
-      
-      let parts = activeOversCompletedString.split('.');
-      totalBallsBowledCount = (parseInt(parts[0]) * 6) + (parseInt(parts[1]) || 0);
-      payload.live_score = `${activeInningsBattingTeam} ${liveInningsRuns}/${liveInningsWickets} (${activeOversCompletedString})`;
-    }
-  }
-
-  // Set Core State Machine
-  if (statusTextLowercase.includes('starts at') || statusTextLowercase.includes('yet to begin') || statusTextLowercase.includes('upcoming') || pageTitle.toLowerCase().includes('upcoming')) {
-    payload.match_state = "future";
-  } else if (statusTextLowercase.includes('won by') || statusTextLowercase.includes('tied') || statusTextLowercase.includes('abandoned')) {
-    payload.match_state = "completed";
-    let winnerExtractionMatch = payload.status.match(/^(.*?)\s+won by/i);
-    if (winnerExtractionMatch) {
-      payload.winner = winnerExtractionMatch[1].trim().toUpperCase();
-    }
-  } else if (scoreElementFound || unifiedPageDataString.includes('CRR') || unifiedPageDataString.includes('Balls left:')) {
-    payload.match_state = "live";
+  if (scoreMatch) {
+    batTeam = scoreMatch[1].toUpperCase();
+    runs = parseInt(scoreMatch[2]);
+    wickets = parseInt(scoreMatch[3]);
+    oversString = scoreMatch[4];
+    payload.live_score = `${batTeam} ${runs}/${wickets} (${oversString})`;
+    
+    let oversParts = oversString.split('.');
+    totalBalls = (parseInt(oversParts[0]) * 6) + (parseInt(oversParts[1]) || 0);
   } else {
-    payload.match_state = "future";
+    payload.live_score = "GT vs RCB (Grand Final)";
   }
 
-  // --- PRE-MATCH ESCAPE PROTOCOL ---
+  // --- RECONCILE STATE DIALS ---
+  let textForStateScan = flatText.toLowerCase();
+  if (textForStateScan.includes("innings break") || pageTitle.toLowerCase().includes("innings break")) {
+    payload.status = "Innings Break";
+    payload.match_state = "live";
+  } else if (textForStateScan.includes('won by')) {
+    payload.match_state = "completed";
+    let winMatch = flatText.match(/([a-zA-Z\s]+)\s+won by/i);
+    if (winMatch) payload.winner = winMatch[1].trim().toUpperCase();
+    payload.status = "Match Completed";
+  } else if (textForStateScan.includes('starts at') || textForStateScan.includes('yet to begin') || pageTitle.toLowerCase().includes('upcoming')) {
+    payload.match_state = "future";
+    payload.status = "Pre-Match Countdown";
+  } else {
+    payload.status = "Live Match Active";
+    payload.match_state = "live";
+  }
+
+  // Pre-Match Escape Protocol
   if (payload.match_state === "future") {
     payload.live_score = "MATCH NOT STARTED";
     payload.current_rr = "0.00"; payload.required_rr = "0.00";
@@ -205,228 +139,146 @@ function processMatchTelemetry(res, domRows, pageTitle, payload, e1, e2, t1Name,
     return res.status(200).json({ success: true, match_info: payload });
   }
 
-  // --- COMPUTE EXACT CRR / RRR DATA SHIELDS ---
-  let trueCurrentRunRate = 0.00;
-  let isSecondInningsChasePhase = false;
-
-  for (let row of domRows) {
-    let crrRegexMatch = row.match(/CRR\s*[:\-]?\s*([\d\.]+)/i) || row.match(/Current Run Rate\s*[:\-]?\s*([\d\.]+)/i);
-    if (crrRegexMatch) {
-      trueCurrentRunRate = parseFloat(crrRegexMatch[1]);
-      payload.current_rr = trueCurrentRunRate.toFixed(2);
-    }
-    let rrrRegexMatch = row.match(/RRR\s*[:\-]?\s*([\d\.]+)/i) || row.match(/Required Run Rate\s*[:\-]?\s*([\d\.]+)/i) || row.match(/Req RR\s*[:\-]?\s*([\d\.]+)/i);
-    if (rrrRegexMatch) {
-      payload.required_rr = parseFloat(rrrRegexMatch[1]).toFixed(2);
-      isSecondInningsChasePhase = true;
-    }
+  // --- RUN RATES LABELS ---
+  let crrMatch = flatText.match(/CRR[:\s]*([\d\.]+)/i);
+  let crrValue = 8.50;
+  if (crrMatch) {
+    crrValue = parseFloat(crrMatch[1]);
+    payload.current_rr = crrValue.toFixed(2);
+  } else if (totalBalls > 0) {
+    crrValue = (runs / totalBalls) * 6;
+    payload.current_rr = crrValue.toFixed(2);
   }
 
-  // Live Math backup calculator
-  if (!payload.current_rr || payload.current_rr === "NO CRR" || parseFloat(payload.current_rr) === 0) {
-    if (totalBallsBowledCount > 0) {
-      trueCurrentRunRate = (liveInningsRuns / totalBallsBowledCount) * 6;
-      payload.current_rr = trueCurrentRunRate.toFixed(2);
-    } else {
-      trueCurrentRunRate = 8.50;
-      payload.current_rr = "8.50";
-    }
-  }
-  if (!isSecondInningsChasePhase) {
+  let rrrMatch = flatText.match(/(?:REQ|RRR|Req RR)[:\s]*([\d\.]+)/i);
+  let isChase = false;
+  if (rrrMatch) {
+    payload.required_rr = parseFloat(rrrMatch[1]).toFixed(2);
+    isChase = true;
+  } else {
     payload.required_rr = "1st Innings";
   }
 
-  // --- TRUNCATION-PROOF PLAYER ARRAY BUILDER ---
-  let validatedBattersList = [];
-  let uniquelyIdentifiedBowler = "";
-
-  for (let row of domRows) {
-    if (row.match(/Last wkt|Partnership|P'ship|Extras|Total|Bowler|Batter|R\(B\)/i)) {
-      continue;
-    }
-
-    // Capture standard scorecard row matching string formats for batting rows
-    let structuralBattingMatch = row.match(/^([A-Za-z\s\.\-']{2,25})\s+(\d+)\s*\(\s*(\d+)\s*\)/);
-    if (structuralBattingMatch) {
-      let extractedPlayerName = structuralBattingMatch[1].replace(/[A-Z]{3,}/g, '').trim();
-      let splittingWordsArray = extractedPlayerName.split(/\s+/);
-      
-      if (splittingWordsArray.length > 2) {
-        extractedPlayerName = splittingWordsArray.slice(-2).join(' ');
-      }
-
-      let completePlayerStatusString = `${extractedPlayerName} ${structuralBattingMatch[2]}(${structuralBattingMatch[3]})`;
-      let activeStrikeFlag = row.includes('*STRIKER_ACTIVE_TOKEN*') || row.includes('🏏') || row.includes('*BAT_ACTIVE*');
-
-      validatedBattersList.push({ text: completePlayerStatusString, isStriker: activeStrikeFlag });
-    }
-
-    // Capture standard scorecard row matching string formats for bowling rows
-    let structuralBowlingMatch = row.match(/^([A-Za-z\s\.\-']{2,25})\s+(\d+[\-\/]\d+)\s+([\d\.]+)/) || row.match(/^([A-Za-z\s\.\-']{2,25})\s+(\d+[\-\/]\d+)/);
-    if (structuralBowlingMatch && !uniquelyIdentifiedBowler) {
-      let verifiedBowlerName = structuralBowlingMatch[1].replace(/(Econ|ECO|Overs|Runs|Wickets|Bowler|Match|W\-R)/gi, '').trim();
-      let internalNameWords = verifiedBowlerName.split(/\s+/);
-      
-      if (internalNameWords.length >= 2 && !verifiedBowlerName.toLowerCase().includes('target') && !verifiedBowlerName.toLowerCase().includes('partnership')) {
-        uniquelyIdentifiedBowler = internalNameWords.slice(-2).join(' ') + ` (${structuralBowlingMatch[2]})`;
-      }
+  // --- RECENT OVER BALLS RADAR ---
+  // Looks for exact text format: Over 20 6 W 0 1 1 2 = 10
+  let overRegex = /Over\s+\d+\s+([0-9WwdNbLbs\s]+?)\s*=\s*\d+/i;
+  let overMatch = flatText.match(overRegex);
+  if (overMatch) {
+    payload.last_over = overMatch[1].trim().split(/\s+/).slice(-6);
+    while (payload.last_over.length < 6) payload.last_over.push("-");
+  } else {
+    let recentMatch = flatText.match(/Recent[:\s]*([W0-9NbLwd\s]+)/i);
+    if (recentMatch) {
+      payload.last_over = recentMatch[1].trim().split(/\s+/).slice(-6);
+      while (payload.last_over.length < 6) payload.last_over.push("-");
     }
   }
 
-  // Sync to multiple fields to handle whatever layout variables your UI application is using
-  if (validatedBattersList.length > 0) {
-    let primaryBatterRecord = validatedBattersList[0];
-    let secondaryBatterRecord = validatedBattersList[1];
+  // --- HIGH-FIDELITY BATSMAN PAIR TRACKER ---
+  let cleanerTextForBatters = flatText.replace(/\*STRIKER_ACTIVE_TOKEN\*/g, '');
+  let batterRegex = /([A-Z][a-zA-Z\s\.\-']{2,25}?)\s+(\d{1,3})\s*\(\s*(\d{1,3})\s*\)/g;
+  let batterMatches = [...cleanerTextForBatters.matchAll(batterRegex)];
+  let foundBatters = [];
 
-    let finalStrikerDisplay = primaryBatterRecord.text + " 🏏";
-    let finalNonStrikerDisplay = secondaryBatterRecord ? secondaryBatterRecord.text : "Off-Strike";
-
-    if (secondaryBatterRecord && secondaryBatterRecord.isStriker && !primaryBatterRecord.isStriker) {
-      finalStrikerDisplay = secondaryBatterRecord.text + " 🏏";
-      finalNonStrikerDisplay = primaryBatterRecord.text;
+  batterMatches.forEach(m => {
+    let nameOnly = m[1].trim();
+    if (!nameOnly.includes('Batter') && !nameOnly.includes('Total') && !nameOnly.includes('Partnership') && !nameOnly.includes('Extras')) {
+       let strikerFlag = flatText.includes(`*STRIKER_ACTIVE_TOKEN* ${nameOnly}`) || flatText.includes(`${nameOnly} *STRIKER_ACTIVE_TOKEN*`);
+       foundBatters.push({ text: `${nameOnly} ${m[2]}(\s*${m[3]})`, isStriker: strikerFlag, name: nameOnly });
     }
+  });
 
-    payload.striker = finalStrikerDisplay; payload.non_striker = finalNonStrikerDisplay;
-    payload.batter_1 = finalStrikerDisplay; payload.batter_2 = finalNonStrikerDisplay;
-    payload.bat_1 = finalStrikerDisplay; payload.bat_2 = finalNonStrikerDisplay;
+  if (foundBatters.length > 0) {
+    let b1 = foundBatters[0]; let b2 = foundBatters[1];
+    if (b1.isStriker || !b2) {
+      payload.striker = b1.text + " 🏏"; payload.non_striker = b2 ? b2.text : "Off-Strike";
+    } else {
+      payload.striker = b2.text + " 🏏"; payload.non_striker = b1.text;
+    }
   } else {
     payload.striker = "Target Active"; payload.non_striker = "Off-Strike";
-    payload.batter_1 = "Target Active"; payload.batter_2 = "Off-Strike";
-    payload.bat_1 = "Target Active"; payload.bat_2 = "Off-Strike";
   }
+  payload.batter_1 = payload.striker; payload.batter_2 = payload.non_striker;
+  payload.bat_1 = payload.striker; payload.bat_2 = payload.non_striker;
 
-  payload.bowler = uniquelyIdentifiedBowler || "🔄 Rotating Bowler Node";
-  if (payload.bowler.toLowerCase().includes('pp') || payload.bowler.toLowerCase().includes('powerplay')) {
-    payload.bowler = "🔄 Tactics Adjustment Phase";
-  }
+  // --- HIGH-FIDELITY ACTIVE BOWLER TRACKER ---
+  // Looks for layout row format: Rasikh Salam 3-27 4.0 6.75
+  let bowlerRegex = /([A-Z][a-zA-Z\s\.\-']{2,25}?)\s+(\d{1,2}[\-\/]\d{1,3})\s+(\d{1,2}\.\d{1,2})\s+([\d\.]+)/g;
+  let bowlerMatches = [...cleanerTextForBatters.matchAll(bowlerRegex)];
+  let foundBowlers = [];
 
-  // --- RECENT OVER HISTORY BALLS EXTRACTION ---
-  for (let row of domRows) {
-    if (row.startsWith('Over') || row.includes('Recent')) {
-      let arrayBlocks = row.split(/\s+/);
-      let validatedCricketBalls = arrayBlocks.filter(block => block === 'W' || block === 'Wd' || block === 'Nb' || !isNaN(parseInt(block)));
-      if (validatedCricketBalls.length >= 2) {
-        payload.last_over = validatedCricketBalls.slice(-6);
-        while (payload.last_over.length < 6) {
-          payload.last_over.push('-');
-        }
-        break;
-      }
+  bowlerMatches.forEach(m => {
+    let nameOnly = m[1].trim();
+    if (!nameOnly.includes('Bowler') && !nameOnly.includes('Extras') && !nameOnly.includes('Total')) {
+      foundBowlers.push(`${nameOnly} (${m[2]})`);
     }
-  }
+  });
+  payload.bowler = foundBowlers.length > 0 ? foundBowlers[0] : "🔄 Rotating Bowler Node";
 
-  return runChampionshipOracleLogic(res, domRows, payload, e1, e2, t1Name, t2Name, liveInningsRuns, liveInningsWickets, totalBallsBowledCount, trueCurrentRunRate, isSecondInningsChasePhase, activeInningsBattingTeam);
+  return runChampionshipOracleLogic(res, flatText, payload, e1, e2, t1Name, t2Name, runs, wickets, totalBalls, crrValue, isChase, batTeam);
 }
+
 // ==============================================================================
-// LAYER 4: TRUNCATION-PROOF ODDS SNIPER ENGINE
+// LAYER 4: TRUNCATION-PROOF ODDS SNIPER ENGINE (THE 12-13 PAISE REAL SCAN)
 // ==============================================================================
-function runChampionshipOracleLogic(res, domRows, payload, e1, e2, t1Name, t2Name, runs, wickets, totalBalls, crr, isChase, batTeam) {
+function runChampionshipOracleLogic(res, flatText, payload, e1, e2, t1Name, t2Name, runs, wickets, totalBalls, crr, isChase, batTeam) {
   let isRealMarketOddsScraped = false;
   let bookmakerFavoriteTeamToken = "";
   let favoriteBackOddsPaise = 0;
   let favoriteLayOddsPaise = 0;
   let combinedOddsStringDisplay = "N/A";
 
-  // Scan row matrices cleanly to detect numeric odds boxes matching short tokens
-  for (let row of domRows) {
-    let cleanRowString = row.replace(/\s+/g, ' ').trim();
-    
-    let matchRCB = cleanRowString.match(/(RCB|Royal\s+Challengers|Benga\.\.\.|Bangalore|Bengaluru)\s+(\d{1,3})\s+(\d{1,3})\b/i);
-    let matchGT = cleanRowString.match(/(GT|Gujarat\s+Titans|Titans)\s+(\d{1,3})\s+(\d{1,3})\b/i);
+  // Scan for "RCB 12 13" or "GT 12 13" directly across the space-flattened plain text
+  let oddsRegexPattern = /\b(GT|RCB)\s+(\d{1,3})\s+(\d{1,3})\b/gi;
+  let oddsMatches = [...flatText.matchAll(oddsRegexPattern)];
 
-    if (matchRCB) {
-      let backOdds = parseInt(matchRCB[2]);
-      let layOdds = parseInt(matchRCB[3]);
-      if (backOdds > 0 && layOdds > 0 && Math.abs(backOdds - layOdds) <= 4) {
-        bookmakerFavoriteTeamToken = "RCB";
-        favoriteBackOddsPaise = backOdds;
-        favoriteLayOddsPaise = layOdds;
-        isRealMarketOddsScraped = true;
-        break;
-      }
-    }
-    
-    if (matchGT) {
-      let backOdds = parseInt(matchGT[2]);
-      let layOdds = parseInt(matchGT[3]);
-      if (backOdds > 0 && layOdds > 0 && Math.abs(backOdds - layOdds) <= 4) {
-        bookmakerFavoriteTeamToken = "GT";
-        favoriteBackOddsPaise = backOdds;
-        favoriteLayOddsPaise = layOdds;
-        isRealMarketOddsScraped = true;
-        break;
-      }
+  for (let match of oddsMatches) {
+    let teamToken = match[1].toUpperCase();
+    let backVal = parseInt(match[2]);
+    let layVal = parseInt(match[3]);
+
+    if (backVal > 0 && layVal > 0 && backVal <= 150 && layVal <= 150 && Math.abs(backVal - layVal) <= 4) {
+      bookmakerFavoriteTeamToken = teamToken;
+      favoriteBackOddsPaise = Math.min(backVal, layVal);
+      favoriteLayOddsPaise = Math.max(backVal, layVal);
+      combinedOddsStringDisplay = `${favoriteBackOddsPaise}-${favoriteLayOddsPaise}`;
+      isRealMarketOddsScraped = true;
+      break;
     }
   }
 
-  // --- TRUNCATION SAFEGUARD FALLBACK SCANNERS ---
+  // Safe 100% Uptime Math Calculator if Bookie Elements are Hidden during final overs
   if (!isRealMarketOddsScraped) {
-    for (let row of domRows) {
-      let adjacencyPatternMatch = row.match(/([A-Za-z\.\s]{2,15})\s+(\d{1,3})\s+(\d{1,3})\b/);
-      if (adjacencyPatternMatch) {
-        let textToken = adjacencyPatternMatch[1].toLowerCase();
-        let valueA = parseInt(adjacencyPatternMatch[2]);
-        let valueB = parseInt(adjacencyPatternMatch[3]);
-        
-        if (valueA > 0 && valueB > 0 && valueA <= 140 && valueB <= 140 && Math.abs(valueA - valueB) <= 3) {
-          if (textToken.includes('beng') || textToken.includes('rcb') || textToken.includes('royal')) {
-            bookmakerFavoriteTeamToken = "RCB";
-            favoriteBackOddsPaise = Math.min(valueA, valueB);
-            favoriteLayOddsPaise = Math.max(valueA, valueB);
-            isRealMarketOddsScraped = true;
-            break;
-          } else if (textToken.includes('guj') || textToken.includes('gt') || textToken.includes('titan')) {
-            bookmakerFavoriteTeamToken = "GT";
-            favoriteBackOddsPaise = Math.min(valueA, valueB);
-            favoriteLayOddsPaise = Math.max(valueA, valueB);
-            isRealMarketOddsScraped = true;
-            break;
-          }
-        }
-      }
-    }
-  }
-
-  // --- 100% UPTIME MATHEMATICAL IMPROVISED ODDS CALCULATOR ---
-  if (isRealMarketOddsScraped) {
-    combinedOddsStringDisplay = `${favoriteBackOddsPaise}-${favoriteLayOddsPaise}`;
-  } else {
     let bowlTeam = (batTeam === "GT") ? "RCB" : "GT";
-    let nativeWinProbabilityValue = 50;
-    let totalRemainingBallsCount = 120 - totalBalls;
+    let nativeWinProb = 50;
+    let remainingBalls = 120 - totalBalls;
 
     if (isChase) {
-      let targetRequiredRunRate = parseFloat(payload.required_rr) || 0;
-      if (wickets >= 10 || (totalRemainingBallsCount <= 0 && targetRequiredRunRate > 0)) {
-        nativeWinProbabilityValue = 1;
-      } else if (targetRequiredRunRate <= 0) {
-        nativeWinProbabilityValue = 99;
-      } else {
-        let runRateDifferential = crr - targetRequiredRunRate;
-        nativeWinProbabilityValue = 50 + (runRateDifferential * 6) - (wickets * 4.5);
-      }
+      let rrrVal = parseFloat(payload.required_rr) || 0;
+      if (wickets >= 10 || (remainingBalls <= 0 && rrrVal > 0)) nativeWinProb = 1;
+      else if (rrrVal <= 0) nativeWinProb = 99;
+      else nativeWinProb = 50 + ((crr - rrrVal) * 6) - (wickets * 4.5);
     } else {
-      let baselineTargetParScore = 185;
-      let calculatedProjectedRunsTotal = runs + (totalRemainingBallsCount / 6) * crr;
-      nativeWinProbabilityValue = 50 + ((calculatedProjectedRunsTotal - baselineTargetParScore) * 0.75) - (wickets * 4);
+      let projection = runs + (remainingBalls / 6) * crr;
+      nativeWinProb = 50 + ((projection - 185) * 0.75) - (wickets * 4);
     }
 
-    nativeWinProbabilityValue = Math.max(5, Math.min(95, nativeWinProbabilityValue));
-    bookmakerFavoriteTeamToken = (batTeam === "GT" ? (nativeWinProbabilityValue > 50 ? "GT" : "RCB") : (nativeWinProbabilityValue > 50 ? "RCB" : "GT"));
+    nativeWinProb = Math.max(5, Math.min(95, nativeWinProb));
+    bookmakerFavoriteTeamToken = (batTeam === "GT" ? (nativeWinProb > 50 ? "GT" : "RCB") : (nativeWinProb > 50 ? "RCB" : "GT"));
+    let maxProb = Math.max(nativeWinProb, 100 - nativeWinProb);
     
-    let maximalProbabilityLimit = Math.max(nativeWinProbabilityValue, 100 - nativeWinProbabilityValue);
-    favoriteBackOddsPaise = Math.max(1, Math.round(((100 - maximalProbabilityLimit) / maximalProbabilityLimit) * 100));
+    favoriteBackOddsPaise = Math.max(1, Math.round(((100 - maxProb) / maxProb) * 100));
     favoriteLayOddsPaise = favoriteBackOddsPaise + 1;
     combinedOddsStringDisplay = `${favoriteBackOddsPaise}-${favoriteLayOddsPaise}`;
-    isRealMarketOddsScraped = true;
   }
 
   payload.match_prediction = `[LIVE MARKET ODDS] ${bookmakerFavoriteTeamToken} is Favorite at ${combinedOddsStringDisplay} Paise`;
 
   return evaluateTradingStrategies(res, payload, e1, e2, t1Name, t2Name, runs, wickets, totalBalls, crr, isChase, batTeam, bookmakerFavoriteTeamToken, favoriteBackOddsPaise, favoriteLayOddsPaise);
 }
+
 // ==============================================================================
-// LAYER 5: QUANTUM HEDGE ENGINE & MATHEMATICAL EXECUTION
+// LAYER 5: TACTICAL CALCULATOR & QUANTUM HEDGE ENGINE
 // ==============================================================================
 function evaluateTradingStrategies(res, payload, e1, e2, t1Name, t2Name, runs, wickets, totalBalls, crr, isChase, batTeam, favTeam, backPaise, layPaise) {
   let activeInplayStrategicTactic = "🟡 HOLD - STANDARD ACCUMULATION";
@@ -437,26 +289,22 @@ function evaluateTradingStrategies(res, payload, e1, e2, t1Name, t2Name, runs, w
     activeInplayStrategicTactic = "🟢 PLAY (BACK) - HIGH AGGRESSION";
   }
 
-  // --- RUN PHASE MICRO-PROJECTIONS OVERS TAB ---
-  if (isChase) {
+  if (payload.status === "Innings Break") {
+    payload.prediction = `INNINGS BREAK | PHASE MARKETS CLOSED\nTACTIC: ASSESSING TARGET DEVIATION MATRIX`;
+  } else if (isChase) {
     payload.prediction = `CHASE ORACLE | PHASE MARKETS CLOSED\nTACTIC: ${activeInplayStrategicTactic}`;
   } else {
     let projectedLinesArray = [];
-    let overTimingMilestones = [6, 10, 15, 20];
-    let currentOversFractionalValue = totalBalls / 6;
+    let milestones = [6, 10, 15, 20];
+    let currentOversFloat = totalBalls / 6;
 
-    for (let milestone of overTimingMilestones) {
-      if (currentOversFractionalValue < milestone) {
-        let remainingMilestoneOvers = milestone - currentOversFractionalValue;
-        let microProjectedScoreTotal = Math.floor(runs + (remainingMilestoneOvers * crr));
-        
-        if (wickets >= 7) {
-          microProjectedScoreTotal = Math.min(microProjectedScoreTotal, runs + 12);
-        }
-        projectedLinesArray.push(`[${milestone}v: ${microProjectedScoreTotal}]`);
+    for (let m of milestones) {
+      if (currentOversFloat < m) {
+        let projected = Math.floor(runs + ((m - currentOversFloat) * crr));
+        if (wickets >= 7) projected = Math.min(projected, runs + 12);
+        projectedLinesArray.push(`[${m}v: ${projected}]`);
       }
     }
-    
     if (projectedLinesArray.length > 0) {
       payload.prediction = `TARGETS: ${projectedLinesArray.join(' ')}\nTACTIC: ${activeInplayStrategicTactic}`;
     } else {
@@ -464,18 +312,18 @@ function evaluateTradingStrategies(res, payload, e1, e2, t1Name, t2Name, runs, w
     }
   }
 
-  // --- SHADOW TRADER CONTINGENCY TRIGGERS ---
-  let reversalTriggerReason = (favTeam === batTeam) ? "One wicket" : "A quick flurry of boundaries";
+  // Shadow Trader Contradiction Triggers
   if (backPaise > 0 && backPaise <= 22) {
-    payload.match_prediction += `\n<br><span style="color:#b366ff; font-weight:bold;">[SHADOW TRADER]</span> <span style="color:#fff;">${favTeam} is extremely cheap (${backPaise}p). Asymmetrical risk: High value to LAY ${favTeam} for a quick trading swing. ${reversalTriggerReason} shifts this market 30-40 paise.</span>`;
+    let triggerReason = (favTeam === batTeam) ? "One wicket" : "A quick flurry of boundaries";
+    payload.match_prediction += `\n<br><span style="color:#b366ff; font-weight:bold;">[SHADOW TRADER]</span> <span style="color:#fff;">${favTeam} is extremely cheap (${backPaise}p). Asymmetrical risk: High value to LAY ${favTeam} for a quick trading swing. ${triggerReason} shifts this market 30-40 paise.</span>`;
   }
 
-  // --- QUANTUM HEDGE ENGINE PROFIT EXITS ---
-  let compiledHedgeAdviceString = "";
+  // --- QUANTUM HEDGE MATHEMATICAL EQUATIONS ---
+  let hedgeAdvice = "";
   const normalizeShortToken = (name) => {
-      let normalizedString = name.toLowerCase().trim();
-      if (normalizedString.includes('gujarat') || normalizedString.includes('gt')) return "GT";
-      if (normalizedString.includes('challengers') || normalizedString.includes('rcb') || normalizedString.includes('bengaluru')) return "RCB";
+      let n = name.toLowerCase().trim();
+      if (n.includes('gujarat') || n.includes('gt')) return "GT";
+      if (n.includes('challengers') || n.includes('rcb') || n.includes('bengaluru')) return "RCB";
       return name.toUpperCase();
   };
 
@@ -483,47 +331,41 @@ function evaluateTradingStrategies(res, payload, e1, e2, t1Name, t2Name, runs, w
   let standardizedT1Token = normalizeShortToken(t1Name);
   let standardizedT2Token = normalizeShortToken(t2Name);
 
-  let mappedFavoritePositionExposure = 0;
-  let mappedOpponentPositionExposure = 0;
-  let correspondingOpponentTeamStringName = "";
+  let mappedFavExposure = 0; let mappedOppExposure = 0; let oppTeamName = "";
 
   if (standardizedFavToken === standardizedT1Token) {
-    mappedFavoritePositionExposure = e1; mappedOpponentPositionExposure = e2;
-    correspondingOpponentTeamStringName = t2Name;
+    mappedFavExposure = e1; mappedOppExposure = e2; oppTeamName = t2Name;
   } else if (standardizedFavToken === standardizedT2Token) {
-    mappedFavoritePositionExposure = e2; mappedOpponentPositionExposure = e1;
-    correspondingOpponentTeamStringName = t1Name;
+    mappedFavExposure = e2; mappedOppExposure = e1; oppTeamName = t1Name;
   }
 
   if (e1 === 0 && e2 === 0) {
-    compiledHedgeAdviceString = `[ENTRY PROTOCOL] No active ledger. Wait for entry signals.`;
-  } else if (mappedFavoritePositionExposure > 0 && mappedOpponentPositionExposure < 0) {
-    let liabilityCoverStakeTarget = Math.abs(mappedOpponentPositionExposure);
-    let layTaxProfitReductionCost = liabilityCoverStakeTarget * (layPaise / 100);
-    let finalNetSecuredGreenBookProfit = mappedFavoritePositionExposure - layTaxProfitReductionCost;
+    hedgeAdvice = `[ENTRY PROTOCOL] No active ledger. Wait for entry signals.`;
+  } else if (mappedFavExposure > 0 && mappedOppExposure < 0) {
+    let liabilityTarget = Math.abs(mappedOppExposure);
+    let layTaxCost = liabilityTarget * (layPaise / 100);
+    let finalNetSecuredProfit = mappedFavExposure - layTaxCost;
 
-    if (finalNetSecuredGreenBookProfit > 0) {
-      compiledHedgeAdviceString = `🟢 [GREEN BOOK AVAILABLE]\nTo clear -${Math.abs(mappedOpponentPositionExposure).toFixed(0)} on ${correspondingOpponentTeamStringName}:\n> LAY ${favTeam} at ${layPaise}p.\n> FINAL BOOK: +${finalNetSecuredGreenBookProfit.toFixed(0)}`;
+    if (finalNetSecuredProfit > 0) {
+      hedgeAdvice = `🟢 [GREEN BOOK AVAILABLE]\nTo clear -${Math.abs(mappedOppExposure).toFixed(0)} on ${oppTeamName}:\n> LAY ${favTeam} at ${layPaise}p.\n> FINAL BOOK: +${finalNetSecuredProfit.toFixed(0)}`;
     } else {
-      compiledHedgeAdviceString = `🟡 [HEDGE PENDING] Wait for ${favTeam} odds to drop lower to secure net profit.`;
+      hedgeAdvice = `🟡 [HEDGE PENDING] Wait for ${favTeam} odds to drop lower to secure net profit.`;
     }
-  } else if (mappedFavoritePositionExposure < 0 && mappedOpponentPositionExposure > 0) {
-    let backupBackCoverStakeTarget = Math.abs(mappedFavoritePositionExposure) / (backPaise / 100);
-    let finalNetSecuredReverseGreenBookProfit = mappedOpponentPositionExposure - backupBackCoverStakeTarget;
+  } else if (mappedFavExposure < 0 && mappedOppExposure > 0) {
+    let backCoverStake = Math.abs(mappedFavExposure) / (backPaise / 100);
+    let finalNetSecuredProfit = mappedOppExposure - backCoverStake;
 
-    if (finalNetSecuredReverseGreenBookProfit > 0) {
-      compiledHedgeAdviceString = `🟢 [GREEN BOOK AVAILABLE]\nTo clear -${Math.abs(mappedFavoritePositionExposure).toFixed(0)} on ${favTeam}:\n> BACK ${favTeam} at ${backPaise}p.\n> FINAL BOOK: +${finalNetSecuredReverseGreenBookProfit.toFixed(0)}`;
+    if (finalNetSecuredProfit > 0) {
+      hedgeAdvice = `🟢 [GREEN BOOK AVAILABLE]\nTo clear -${Math.abs(mappedFavExposure).toFixed(0)} on ${favTeam}:\n> BACK ${favTeam} at ${backPaise}p.\n> FINAL BOOK: +${finalNetSecuredProfit.toFixed(0)}`;
     } else {
-      compiledHedgeAdviceString = `🟡 [HEDGE PENDING] Wait for ${favTeam} odds to drift out higher to secure net profit.`;
+      hedgeAdvice = `🟡 [HEDGE PENDING] Wait for ${favTeam} odds to drift out higher to secure net profit.`;
     }
-  } else if (mappedFavoritePositionExposure >= 0 && mappedOpponentPositionExposure >= 0) {
-    compiledHedgeAdviceString = `✅ [BOOK SECURED] Zero risk exposure maintained. (${favTeam}: +${mappedFavoritePositionExposure.toFixed(0)} | ${correspondingOpponentTeamStringName}: +${mappedOpponentPositionExposure.toFixed(0)})`;
+  } else if (mappedFavExposure >= 0 && mappedOppExposure >= 0) {
+    hedgeAdvice = `✅ [BOOK SECURED] Zero risk exposure maintained. (${favTeam}: +${mappedFavExposure.toFixed(0)} | ${oppTeamName}: +${mappedOppExposure.toFixed(0)})`;
   } else {
-    compiledHedgeAdviceString = `🔴 [CRITICAL ERROR] Negative exposure bound on both factions. Lay the active favorite immediately.`;
+    hedgeAdvice = `🔴 [CRITICAL ERROR] Negative exposure bound on both factions. Lay the active favorite immediately.`;
   }
 
-  payload.ledger_analysis = compiledHedgeAdviceString;
-  
-  // Terminal response dispatch loop
+  payload.ledger_analysis = hedgeAdvice;
   return res.status(200).json({ success: true, match_info: payload });
 }
