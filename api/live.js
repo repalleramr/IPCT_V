@@ -1,7 +1,7 @@
 // =========================================================================================
 // CREX LIVE SCRAPER - GT vs RCB
-// Version: 21.0.0
-// Clean section parsing, stronger bowler extraction, odds scan from visible text + scripts
+// Version: 22.0.0
+// Section-based scorecard parser + stronger bowler extraction + visible odds chips
 // =========================================================================================
 
 const axios = require('axios');
@@ -192,7 +192,7 @@ function joinSection(lines) {
 
 function extractTitle($, lines) {
     const title = cleanText($('title').text());
-    if (title && !/Please enable JavaScript/i.test(title) && title.length < 140) {
+    if (title && !/Please enable JavaScript/i.test(title) && title.length < 160) {
         return title;
     }
 
@@ -227,21 +227,48 @@ function extractToss(lines, fallbackText) {
     return m ? cleanText(m[1]) : 'UNAVAILABLE';
 }
 
-function extractScoreLine(lines) {
-    for (const line of lines) {
-        if (/need\s+\d+\s+runs?\s+in\s+\d+\s+balls?/i.test(line)) continue;
+function extractScoreCandidates(text) {
+    const candidates = [];
+    const source = String(text || '');
 
-        const m = line.match(/\b(GT|RCB)\s+(\d{1,3})\s*[-/]\s*(\d{1,2})\s*\(?(\d+(?:\.\d+)?)\)?\b/i);
-        if (m) {
-            return {
-                team: m[1].toUpperCase(),
-                runs: toInt(m[2]),
-                wickets: toInt(m[3]),
-                overs: m[4]
-            };
+    const patterns = [
+        /\b(GT|RCB)\s+(\d{1,3})\s*[-/]\s*(\d{1,2})\s*\(?\s*(\d{1,2}(?:\.\d+)?)\s*\)?\b/gi,
+        /\b(GT|RCB)\s+(\d{1,3})-(\d{1,2})\s+(\d{1,2}(?:\.\d+)?)\b/gi
+    ];
+
+    for (const re of patterns) {
+        let m;
+        while ((m = re.exec(source)) !== null) {
+            const team = m[1].toUpperCase();
+            const runs = toInt(m[2]);
+            const wickets = toInt(m[3]);
+            const overs = parseFloat(m[4]);
+
+            if (runs === null || wickets === null || !Number.isFinite(overs)) continue;
+            candidates.push({ team, runs, wickets, overs, index: m.index });
         }
     }
-    return null;
+
+    if (!candidates.length) return null;
+
+    // Prefer the latest/highest overs, then the latest appearance.
+    candidates.sort((a, b) => (b.overs - a.overs) || (b.index - a.index));
+    const best = candidates[0];
+    return `${best.team} ${best.runs}/${best.wickets} (${String(best.overs)})`;
+}
+
+function extractLiveScore(lines, bodyText, titleText) {
+    // Prefer body text. Fallback to title only if needed.
+    const bodyScore = extractScoreCandidates(bodyText);
+    if (bodyScore) return bodyScore;
+
+    const lineScore = extractScoreCandidates(lines.join(' '));
+    if (lineScore) return lineScore;
+
+    const titleScore = extractScoreCandidates(titleText);
+    if (titleScore) return titleScore;
+
+    return 'NO SCORE';
 }
 
 function extractNeedLine(lines) {
@@ -321,11 +348,10 @@ function extractBatsmen(lines, state, fallbackText) {
 }
 
 function extractBowlerFromText(text) {
-    // Handles both "Rashid Khan 2-14" and "Rashid Khan 2-14(3.5)"
-    const regex = /([A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){1,2})\s+(\d+\s*-\s*\d+(?:\(\d+(?:\.\d+)?\))?|\d+\s*\/\s*\d+(?:\(\d+(?:\.\d+)?\))?)/g;
-
+    const regex = /([A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){1,2})\s+(\d+\s*[-/]\s*\d+(?:\(\d+(?:\.\d+)?\))?|\d+\s*\/\s*\d+(?:\(\d+(?:\.\d+)?\))?)/g;
     const hits = [];
     let m;
+
     while ((m = regex.exec(text)) !== null) {
         const name = cleanText(m[1]);
         const fig = cleanText(m[2]).replace(/\s+/g, '');
@@ -339,7 +365,7 @@ function extractBowlerFromText(text) {
 }
 
 function extractBowler(lines, state, fallbackText) {
-    // Primary: dedicated Bowler block with name on its own line, figure on next line.
+    // Primary: dedicated Bowler block with separate name and figure lines.
     for (let i = 0; i < lines.length; i++) {
         if (!/^Bowler$/i.test(cleanText(lines[i]))) continue;
 
@@ -356,9 +382,13 @@ function extractBowler(lines, state, fallbackText) {
                 continue;
             }
 
-            if (!name && /^[A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){1,2}$/.test(t)) {
-                name = t;
-                continue;
+            if (!name) {
+                // Allow badge suffix like "IMP" on the bowler line.
+                const nameMatch = t.match(/^([A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){1,2})(?:\s+[A-Z]{2,5})?$/);
+                if (nameMatch) {
+                    name = cleanText(nameMatch[1]);
+                    continue;
+                }
             }
 
             if (!figure && /^\d+\s*[-/]\s*\d+(?:\(\d+(?:\.\d+)?\))?$/.test(t)) {
@@ -372,7 +402,7 @@ function extractBowler(lines, state, fallbackText) {
         }
     }
 
-    // Secondary: try to parse from the bowler section text
+    // Secondary: bowler section text.
     const bowlerSection = sectionBetween(
         lines,
         /^Bowler$/i,
@@ -382,14 +412,14 @@ function extractBowler(lines, state, fallbackText) {
     const fromSection = extractBowlerFromText(sectionText);
     if (fromSection) return fromSection;
 
-    // Tertiary: state object
+    // Tertiary: state.
     const direct = cleanText(findFirstValueByKeys(state, ['bowler', 'currentbowler', 'lastbowler', 'bowling']) || '');
     if (direct) {
         const fromState = extractBowlerFromText(direct);
         if (fromState) return fromState;
     }
 
-    // Final fallback: full text
+    // Final: full text.
     const fromFallback = extractBowlerFromText(cleanText(fallbackText));
     if (fromFallback) return fromFallback;
 
@@ -399,8 +429,6 @@ function extractBowler(lines, state, fallbackText) {
 function extractLastOver(lines, state, fallbackText) {
     const joined = lines.join(' ');
 
-    // Capture explicit over blocks like:
-    // Over 12 0 4 1 1 0 1 = 7
     const overRegex = /Over\s+\d+\s+((?:(?:Wd|Nb|W|[0-6])\s+){1,12})=\s*\d+/gi;
     const matches = [...joined.matchAll(overRegex)];
 
@@ -413,7 +441,6 @@ function extractLastOver(lines, state, fallbackText) {
         if (balls.length >= 2) return balls.slice(-6);
     }
 
-    // State array fallback
     let found = null;
     walkObject(state, (node) => {
         if (found) return;
@@ -434,7 +461,6 @@ function extractLastOver(lines, state, fallbackText) {
 
     if (found) return found;
 
-    // Loose fallback
     const loose = cleanText(fallbackText);
     const looseMatches = [...loose.matchAll(/Over\s+\d+\s+((?:[WdNbW0-6]\s*){2,12})/gi)];
     if (looseMatches.length) {
@@ -446,45 +472,56 @@ function extractLastOver(lines, state, fallbackText) {
     return ['-', '-', '-', '-', '-', '-'];
 }
 
-function extractOddsFromText(text) {
-    // Accept only tiny market chips near team labels.
-    // Example expected: "RCB 04 05"
+function extractOddsCandidates(text) {
     const lines = Array.isArray(text) ? text : String(text || '').split(/\n+/g);
+    const candidates = [];
 
     for (const rawLine of lines) {
         const line = cleanText(rawLine);
         if (!line) continue;
 
-        // Preferred exact team chip pattern
-        let m = line.match(/\b(RCB|GT)\b[^0-9]{0,35}(\d{1,2})\s+(\d{1,2})\b/i);
-        if (m) {
-            const a = toInt(m[2]);
-            const b = toInt(m[3]);
-            if (a !== null && b !== null && a <= 20 && b <= 20) {
-                return {
-                    favTeam: m[1].toUpperCase(),
-                    backPaise: pad2(Math.min(a, b)),
-                    layPaise: pad2(Math.max(a, b))
-                };
-            }
+        // Ignore obvious non-market lines.
+        if (
+            /^(Batter|Bowler|CRR|RRR|Target|Over|Overs|Commentary|Projected|Match info|Scorecard|Last Wkt|Last Wicket)$/i.test(line) ||
+            /need\s+\d+\s+runs?\s+in\s+\d+\s+balls?/i.test(line)
+        ) {
+            continue;
         }
 
-        // Slightly looser fallback
-        m = line.match(/\b(RCB|GT)\b.*?\b(0?\d)\s+(0?\d)\b/i);
-        if (m) {
-            const a = toInt(m[2]);
-            const b = toInt(m[3]);
-            if (a !== null && b !== null && a <= 20 && b <= 20) {
-                return {
-                    favTeam: m[1].toUpperCase(),
-                    backPaise: pad2(Math.min(a, b)),
-                    layPaise: pad2(Math.max(a, b))
-                };
-            }
-        }
+        // Short market widget rows only.
+        if (line.length > 80) continue;
+        if (/(\d{3}|\(\d)/.test(line)) continue; // block score lines like 139-5 (15.0)
+
+        // Prefer team lines with 2 or more tiny numeric chips.
+        const hasTeam = /\b(RCB|GT)\b/i.test(line);
+        if (!hasTeam) continue;
+
+        const nums = (line.match(/\b\d{1,2}\b/g) || [])
+            .map(v => toInt(v))
+            .filter(v => v !== null && v <= 20);
+
+        if (nums.length < 2) continue;
+
+        const lastTwo = nums.slice(-2);
+        candidates.push({
+            favTeam: /RCB/i.test(line) ? 'RCB' : 'GT',
+            backPaise: pad2(Math.min(lastTwo[0], lastTwo[1])),
+            layPaise: pad2(Math.max(lastTwo[0], lastTwo[1])),
+            line,
+            score: Math.min(lastTwo[0], lastTwo[1])
+        });
     }
 
-    return null;
+    if (!candidates.length) return null;
+
+    // Smallest chip is usually the favorite.
+    candidates.sort((a, b) => a.score - b.score);
+    const best = candidates[0];
+    return {
+        favTeam: best.favTeam,
+        backPaise: best.backPaise,
+        layPaise: best.layPaise
+    };
 }
 
 function extractOddsFromState(state) {
@@ -702,7 +739,7 @@ module.exports = async function (req, res) {
     const $ = cheerio.load(htmlData);
     const bodyHtml = $('body').html() || htmlData;
     const lines = htmlToLines(bodyHtml);
-    const fallbackText = cleanText($('body').text() || htmlData);
+    const bodyText = cleanText($('body').text() || htmlData);
 
     // Structured state if available
     let parsedState = null;
@@ -738,8 +775,11 @@ module.exports = async function (req, res) {
     payload.title = extractTitle($, lines);
 
     const needObj = extractNeedLine(lines);
-    payload.status = needObj ? needObj.raw : (cleanText(payload.status) === 'Initializing...' ? 'Live Match Active' : cleanText(payload.status));
-    if (needObj) payload.status = needObj.raw;
+    if (needObj) {
+        payload.status = needObj.raw;
+    } else if (cleanText(payload.status) === 'Initializing...') {
+        payload.status = 'Live Match Active';
+    }
 
     payload.match_state = getMatchState(payload.status);
 
@@ -749,38 +789,38 @@ module.exports = async function (req, res) {
     }
 
     payload.venue = extractVenue(state, lines);
-    payload.toss = extractToss(lines, fallbackText);
+    payload.toss = extractToss(lines, bodyText);
 
-    const scoreObj = extractScoreLine(lines);
-    if (scoreObj) {
-        payload.live_score = `${scoreObj.team} ${scoreObj.runs}/${scoreObj.wickets} (${scoreObj.overs})`;
-    } else {
-        const stateLive = cleanText(findFirstValueByKeys(state, ['live_score', 'livescore', 'scoreline', 'score_text']) || '');
-        if (stateLive && /\d/.test(stateLive)) payload.live_score = stateLive;
+    payload.live_score = extractLiveScore(lines, bodyText, payload.title);
+
+    // If a score was still missed, pull from the title as an emergency fallback.
+    if (payload.live_score === 'NO SCORE') {
+        const titleScore = extractScoreCandidates(payload.title);
+        if (titleScore) payload.live_score = titleScore;
     }
 
     payload.current_rr = extractCRR(lines, state);
     payload.required_rr = extractRRR(lines, state);
 
-    const batsmen = extractBatsmen(lines, state, fallbackText);
+    const batsmen = extractBatsmen(lines, state, bodyText);
     if (batsmen.length >= 1) payload.bat_1 = `${batsmen[0].name} ${batsmen[0].runs}(${batsmen[0].balls})`;
     if (batsmen.length >= 2) payload.bat_2 = `${batsmen[1].name} ${batsmen[1].runs}(${batsmen[1].balls})`;
 
-    payload.bowler = extractBowler(lines, state, fallbackText);
+    payload.bowler = extractBowler(lines, state, bodyText);
 
-    const lastOver = extractLastOver(lines, state, fallbackText);
+    const lastOver = extractLastOver(lines, state, bodyText);
     if (lastOver && lastOver.length) {
         payload.last_over = lastOver.slice(-6);
         while (payload.last_over.length < 6) payload.last_over.unshift('-');
     }
 
-    // Odds: scan visible text first, then scripts/state
+    // Odds: visible text first, then state
     const pageTextLines = [
         ...lines,
-        ...scripts.map(cleanText).filter(Boolean)
+        ...bodyText.split(/\n+/g).map(cleanText).filter(Boolean)
     ];
 
-    let odds = extractOddsFromText(pageTextLines) || extractOddsFromState(state);
+    let odds = extractOddsCandidates(pageTextLines) || extractOddsFromState(state);
 
     if (odds && odds.favTeam && odds.backPaise && odds.layPaise) {
         payload.match_prediction = `[LIVE MARKET ODDS] ${odds.favTeam} is Favorite at ${odds.backPaise}-${odds.layPaise} Paise`;
@@ -791,7 +831,13 @@ module.exports = async function (req, res) {
     const wickets = parseWickets(payload.live_score);
     const secondInnings = isSecondInningsFromStatus(payload.status, payload.required_rr);
     payload.prediction = buildPrediction(payload.match_state, secondInnings, payload.current_rr, wickets);
-    payload.ledger_analysis = buildLedgerAnalysis(ledgerExposureTeam1, ledgerExposureTeam2, odds, clientStringTeam1, clientStringTeam2);
+    payload.ledger_analysis = buildLedgerAnalysis(
+        ledgerExposureTeam1,
+        ledgerExposureTeam2,
+        odds,
+        clientStringTeam1,
+        clientStringTeam2
+    );
 
     return res.status(200).json({
         success: true,
