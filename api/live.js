@@ -1,6 +1,6 @@
 // ==============================================================================
 // MI6 QUANTUM ORACLE - CHAMPIONSHIP SNIPER EDITION (GT vs RCB)
-// Uplink: Direct Strike (With Multi-Layout Fallback Engine)
+// Uplink: Universal Layout Compatibility & Live Math Fallback Engine
 // ==============================================================================
 const axios = require('axios');
 const cheerio = require('cheerio');
@@ -16,9 +16,7 @@ module.exports = async function (req, res) {
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  // ==========================================
-  // DIRECT TARGET OVERRIDE
-  // ==========================================
+  // Direct Match URL Target
   let exactTarget = "https://crex.live/cricket-live-score/gt-vs-rcb-final-indian-premier-league-2026-match-updates-11XM";
   let targetUrl = req.query.url || exactTarget;
   targetUrl = targetUrl.replace('crex.com', 'crex.live');
@@ -36,10 +34,12 @@ module.exports = async function (req, res) {
     'Connection': 'keep-alive'
   };
 
+  // Armor Payload: Includes both sets of keys to guarantee front-end alignment
   let payload = {
     title: "GT VS RCB | GRAND FINAL", status: "Targeting Direct Node...", match_state: "standby", winner: "PENDING",
     live_score: "NO SCORE", current_rr: "0.00", required_rr: "1st Innings",
     striker: "Target Engaged", non_striker: "Off-Strike", bowler: "Active Bowler",
+    batter_1: "Target Engaged", batter_2: "Off-Strike", bat_1: "Target Engaged", bat_2: "Off-Strike",
     toss: "Tracking Toss Data...", venue: "Narendra Modi Stadium, Ahmedabad", last_over: ["-", "-", "-", "-", "-", "-"],
     prediction: "AWAITING DATA", match_prediction: "", ledger_analysis: "AWAITING TELEMETRY", source_url: "Hunting...", fetch_code: "OH"
   };
@@ -70,7 +70,7 @@ module.exports = async function (req, res) {
   }
 
   // =========================================================================
-  // DIRECT STRIKE SCRAPER ENGINE
+  // CORE EXTRACTION LAYER
   // =========================================================================
   try {
     let htmlAcquired = false; let timestampBuster = Date.now();
@@ -89,27 +89,23 @@ module.exports = async function (req, res) {
       
       bodyText = rawHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
       payload.source_url = "CREX (Direct Target Node)"; htmlAcquired = true;
-    } catch (e) { console.log("Direct Node Blocked."); }
+    } catch (e) { console.log("Direct Node Connection Timeout."); }
 
     payload.fetch_code = htmlAcquired ? "UREKHA" : "OH";
 
     if (!htmlAcquired) {
-      payload.status = "UPLINK FAILED: DIRECT TARGET BLOCKED"; payload.title = "SYSTEM FAULT";
+      payload.status = "UPLINK FAILED: TARGET NODE RESPONDING WITH BLOCK"; payload.title = "SYSTEM FAULT";
       return res.status(200).json({ success: true, match_info: payload });
     }
 
-    // =========================================================================
-    // FIELD STATISTICS EXTRACTION & STATE MACHINE (ANTI-BLEED SHIELD)
-    // =========================================================================
+    // Isolate header block context strings
+    let headerText = bodyText.substring(0, 2500);
     let statusText = $ ? $('.cb-status-msg, .match-status, .info-status, .cb-text-complete, .status-text, .match-info-status').first().text().trim() : "";
     let titleWin = pageTitle.match(/([a-zA-Z\s\-]+won by\s\d+\s(?:runs|wickets|run|wicket))/i);
     if (!statusText && titleWin) statusText = titleWin[1].trim();
     if (statusText) payload.status = statusText;
 
     let statusLower = (statusText || "").toLowerCase();
-    
-    // Scan top layer for active live metrics
-    let headerText = bodyText.substring(0, 2000);
     let isLiveScoreFormat = headerText.match(/(GT|RCB)\s*\d+[\/\-]?\d*/i);
     let scoreInTitle = pageTitle.match(/(GT|RCB)\s*\d+[\/\-]?\d*/i);
     let hasLiveKeywords = headerText.includes('CRR') || headerText.includes('REQ') || headerText.includes('rrr') || headerText.includes('crr');
@@ -140,18 +136,16 @@ module.exports = async function (req, res) {
     } catch (e) { payload.toss = "Toss Error"; }
 
     // =========================================================================
-    // CONDITION: MATCH NOT STARTED (CLEAN COUNTDOWN PROTOCOL)
+    // STATE MECHANICS: PRE-MATCH COUNTER
     // =========================================================================
     if (payload.match_state === "future") {
       payload.live_score = "MATCH NOT STARTED";
       payload.status = statusText || "Awaiting Match Countdown...";
-      payload.current_rr = "0.00";
-      payload.required_rr = "0.00";
-      payload.striker = "Awaiting Live Play";
-      payload.non_striker = "Awaiting Live Play";
-      payload.bowler = "Awaiting Live Play";
-      payload.prediction = "COUNTDOWN ACTIVE";
-      payload.match_prediction = "Line Open Soon | Waiting for Telemetry";
+      payload.current_rr = "0.00"; payload.required_rr = "0.00";
+      payload.striker = "Awaiting Live Play"; payload.non_striker = "Awaiting Live Play"; payload.bowler = "Awaiting Live Play";
+      payload.batter_1 = "Awaiting Live Play"; payload.batter_2 = "Awaiting Live Play";
+      payload.bat_1 = "Awaiting Live Play"; payload.bat_2 = "Awaiting Live Play";
+      payload.prediction = "COUNTDOWN ACTIVE"; payload.match_prediction = "Line Open Soon | Waiting for Telemetry";
       payload.ledger_analysis = "[ENTRY PROTOCOL] No active live data. Waiting for match start.";
       payload.last_over = ["-", "-", "-", "-", "-", "-"];
       
@@ -159,7 +153,7 @@ module.exports = async function (req, res) {
     }
 
     // =========================================================================
-    // CONDITION: LIVE MATCH DATA HANDLING
+    // STATE MECHANICS: LIVE ENVIRONMENT
     // =========================================================================
     let isRealMarket = false;
     let favTeam = ""; let favPaise = 0; let layPaise = 0; let displayOdds = "N/A";
@@ -176,16 +170,22 @@ module.exports = async function (req, res) {
         }
       } catch (e) { payload.status = "Status Error"; }
 
-      // Live Score Processing Engine
+      // Core Live Score Parser
+      let runs = 0; let wkts = 0; let totalBalls = 0;
       try {
         let scoreRegex = /((?:GT|RCB)\s*\d+[\/\-]?\d*\s*\(?\d*\.?\d*\)?)/i;
         let scoreMatch = pageTitle.match(scoreRegex) || headerText.match(scoreRegex);
         if (scoreMatch) {
           let parts = scoreMatch[1].match(/([A-Z]{2,3})\s*(\d+)[\/\-]?(\d*)\s*\(?([\d\.]+)?\)?/i);
           if (parts) {
-            let wkts = parts[3] ? parts[3] : "0";
-            let ovs = parts[4] ? `(${parts[4]})` : "(0.0)";
-            payload.live_score = `${parts[1].toUpperCase()} ${parts[2]}/${wkts} ${ovs}`;
+            runs = parseInt(parts[2]) || 0;
+            wkts = parts[3] ? parseInt(parts[3]) : 0;
+            let oversStr = parts[4] || "0.0";
+            let oversSplit = oversStr.split('.');
+            let oversInt = parseInt(oversSplit[0]) || 0;
+            let ballsInt = oversSplit[1] ? parseInt(oversSplit[1]) : 0;
+            totalBalls = (oversInt * 6) + ballsInt;
+            payload.live_score = `${parts[1].toUpperCase()} ${runs}/${wkts} (${oversStr})`;
           } else {
             payload.live_score = scoreMatch[1].replace('-', '/');
           }
@@ -194,15 +194,21 @@ module.exports = async function (req, res) {
         }
       } catch (e) { payload.live_score = "Score Error"; }
 
-      // --- ROBUST CRR & RRR EXTRACTION SYSTEM (COLON INSENSITIVE) ---
+      // --- RUN RATE ENGINE WITH DIRECT LIVE MATHEMATICS FALLBACK ---
       try {
-        let crrMatch = headerText.match(/CRR\s*[:\-]?\s*([\d\.]+)/i);
-        if (crrMatch) payload.current_rr = crrMatch[1];
-        else payload.current_rr = "8.50"; // System base calculation standard
+        let crrMatch = headerText.match(/(?:CRR|Run Rate)\s*[:\-]?\s*([\d\.]+)/i);
+        if (crrMatch && parseFloat(crrMatch[1]) > 0) {
+          payload.current_rr = parseFloat(crrMatch[1]).toFixed(2);
+        } else if (totalBalls > 0) {
+          // Live fallback computation standard: Prevents 'NO CRR' if text engine slips
+          payload.current_rr = ((runs / totalBalls) * 6).toFixed(2);
+        } else {
+          payload.current_rr = "8.50";
+        }
 
         let reqMatch = headerText.match(/(?:REQ|RRR|Req RR|Required RR)\s*[:\-]?\s*([\d\.]+)/i);
         if (reqMatch) {
-          payload.required_rr = reqMatch[1];
+          payload.required_rr = parseFloat(reqMatch[1]).toFixed(2);
           isChase = true;
         } else {
           payload.required_rr = "1st Innings";
@@ -210,7 +216,7 @@ module.exports = async function (req, res) {
         }
       } catch (e) { payload.current_rr = "8.50"; payload.required_rr = "1st Innings"; }
 
-      // --- ROBUST STRIKER EXTRACTION SYSTEM ---
+      // --- STRIKER MAP ALIGNMENT (UNIVERSAL SYNC) ---
       try {
         let safeText = headerText.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([a-zA-Z])(\d)/g, '$1 $2');
         let batterRegex = /(?:\*BAT\*|\*|🏏)?\s*([A-Z][a-zA-Z\s\.\-']{1,20}?)\s+(\d{1,3})\s*\*?\s*\(\s*(\d{1,3})\s*\)/gi;
@@ -224,15 +230,16 @@ module.exports = async function (req, res) {
           }
         });
 
-        if (validBatters.length > 0) {
-          payload.striker = validBatters[0] + " 🏏";
-          payload.non_striker = validBatters[1] ? validBatters[1] : "Off-Strike";
-        } else {
-          payload.striker = "Target Engaged"; payload.non_striker = "Off-Strike";
-        }
+        let p1Str = validBatters[0] ? validBatters[0] + " 🏏" : "Target Engaged";
+        let p2Str = validBatters[1] ? validBatters[1] : "Off-Strike";
+
+        // Assign to every conceivable array key to fully safeguard the front-end layout bridge
+        payload.striker = p1Str; payload.non_striker = p2Str;
+        payload.batter_1 = p1Str; payload.batter_2 = p2Str;
+        payload.bat_1 = p1Str; payload.bat_2 = p2Str;
       } catch (e) { payload.striker = "Target Engaged"; payload.non_striker = "Off-Strike"; }
 
-      // --- ROBUST BOWLER EXTRACTION SYSTEM (MATCHES STAT PATTERNS) ---
+      // --- BOWLER FIGURES SCANNER ---
       try {
         let safeText = headerText.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([a-zA-Z])(\d)/g, '$1 $2');
         let bowMatch = safeText.match(/([A-Z][a-zA-Z\s\.\-']{2,20}?)\s+(\d{1,2}\s*-\s*\d{1,2}\s*-\s*\d{1,3}\s*-\s*\d{1,2}|\d{1,2}\s*\.\s*\d{1,2}\s+\d+\s+\d+)/);
@@ -247,6 +254,11 @@ module.exports = async function (req, res) {
           payload.bowler = words.slice(-2).join(' ');
         } else { 
           payload.bowler = "Active Bowler"; 
+        }
+
+        // Defensive protection loop against Powerplay overlay strings
+        if (payload.bowler.toLowerCase().includes('pp') || payload.bowler.toLowerCase().includes('powerplay')) {
+          payload.bowler = "🔄 Rotating Bowler";
         }
       } catch (e) { payload.bowler = "Active Bowler"; }
 
@@ -266,26 +278,27 @@ module.exports = async function (req, res) {
       } catch (e) { payload.last_over = ["-", "-", "-", "-", "-", "-"]; }
 
       // ==========================================================
-      // ODDS SNIPER & PROBABILITY ENGINE
+      // PRO LEVEL SITUATIONAL ORACLE CRITERIA
       // ==========================================================
       try {
-        let runs = 0; let wkts = 0; let totalBalls = 0;
-        let scoreMatchClean = payload.live_score.match(/(\d+)[\/\-](\d+)\s*\(?([\d\.]+)\)?/);
-
-        if (scoreMatchClean) {
-          runs = parseInt(scoreMatchClean[1]); 
-          wkts = parseInt(scoreMatchClean[2]);
-          let oversSplit = scoreMatchClean[3].split('.');
-          let overs = parseInt(oversSplit[0]); 
-          let balls = oversSplit[1] ? parseInt(oversSplit[1]) : 0;
-          totalBalls = (overs * 6) + balls;
-        }
-
         let crr = parseFloat(payload.current_rr) || 8.5;
+        let recentRuns = 0; let validBalls = 0; let recentWicketFell = false;
+        payload.last_over.forEach(b => {
+          if (b === 'W') { recentWicketFell = true; validBalls++; }
+          else if (b === 'Wd' || b === 'Nb') recentRuns += 1;
+          else if (!isNaN(parseInt(b))) { recentRuns += parseInt(b); validBalls++; }
+        });
+
         isWeatherInterrupted = (payload.status.toLowerCase().includes('rain') || payload.status.toLowerCase().includes('weather') || payload.status.toLowerCase().includes('dls'));
 
+        let phaseTactic = "🟡 HOLD - STANDARD ACCUMULATION";
+        if (wkts >= 7 || (wkts >= 4 && crr < 7.5)) phaseTactic = "🔴 EAT (LAY) - COLLAPSING PATTERN";
+        else if (recentWicketFell && crr < 8.0) phaseTactic = "🟡 HOLD - PATTERN UNSTABLE";
+        else if (crr >= 9.5 && wkts <= 3) phaseTactic = "🟢 PLAY (BACK) - HIGH AGGRESSION";
+
         if (isChase) { 
-          payload.prediction = `CHASE ORACLE | PHASE MARKETS CLOSED`; 
+          if (isWeatherInterrupted) payload.prediction = `🔴 DLS PROTOCOL ACTIVE | HALT PHASE BETS`;
+          else payload.prediction = `CHASE ORACLE | PHASE MARKETS CLOSED\nTACTIC: ${phaseTactic}`; 
         } else {
           let projections = []; let milestones = [6, 10, 15, 20];
           let currentOvers = totalBalls / 6;
@@ -297,8 +310,11 @@ module.exports = async function (req, res) {
               projections.push(`[${m}v: ${projected}]`);
             }
           }
-          if (projections.length > 0 && !isWeatherInterrupted) payload.prediction = `TARGETS: ${projections.join(' ')}`;
-          else payload.prediction = `INNINGS ENDING`;
+          if (projections.length > 0 && !isWeatherInterrupted) {
+            payload.prediction = `TARGETS: ${projections.join(' ')}\nTACTIC: ${phaseTactic}`;
+          } else {
+            payload.prediction = `INNINGS ENDING\nTACTIC: ${phaseTactic}`;
+          }
         }
 
         let batTeam = payload.live_score.split(' ')[0] || "GT";
