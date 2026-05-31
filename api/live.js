@@ -1,95 +1,46 @@
 // =========================================================================================
-// MI6 QUANTUM ORACLE - GRAND FINAL ENTERPRISE ARCHITECTURE (GT vs RCB)
-// Version: 13.5.0 | Complete Unified Single-File Engine | Zero-Shortcut Implementation
+// MI6 QUANTUM ORACLE - GRAND FINAL CHASE ARCHITECTURE (GT vs RCB)
+// Version: 14.0.0 | Fluid Regex Expansion | 2nd Innings Target Lock
 // =========================================================================================
 
 const axios = require('axios');
 const cheerio = require('cheerio');
 
 // =========================================================================================
-// [SECTION 1] SYSTEM CONSTANTS AND STRICT DICTIONARIES
+// [SECTION 1] CONSTANTS & NETWORK LAYER
 // =========================================================================================
-
-const TEAM_NORMALIZATION_MAP = {
-    "gt": "GT",
-    "gujarat": "GT",
-    "titans": "GT",
-    "gujarat titans": "GT",
-    "gujarat tit": "GT",
-    "gujrattitans": "GT",
-    "rcb": "RCB",
-    "royal": "RCB",
-    "challengers": "RCB",
-    "bengaluru": "RCB",
-    "bangalore": "RCB",
-    "royal challengers": "RCB",
-    "royal challengers bengaluru": "RCB",
-    "royal challengers bangalore": "RCB",
-    "benga...": "RCB", 
-    "royal challengers benga...": "RCB"
-};
 
 const SECURE_BROWSER_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
     'Accept-Language': 'en-US,en;q=0.9',
-    'Accept-Encoding': 'gzip, deflate, br',
     'Connection': 'keep-alive',
     'Cache-Control': 'no-cache'
 };
 
 function generateBasePayload() {
     return {
-        title: "GT VS RCB | GRAND FINAL",
-        status: "Initializing Enterprise Data Stream...",
-        match_state: "standby", 
-        winner: "PENDING",
-        live_score: "NO SCORE",
-        current_rr: "0.00",
-        required_rr: "0.00",
-        striker: "NO STRIKER",
-        non_striker: "NO NON-STRIKER",
-        bowler: "NO BOWLER",
-        batter_1: "NO STRIKER",
-        batter_2: "NO NON-STRIKER",
-        bat_1: "NO STRIKER",
-        bat_2: "NO NON-STRIKER",
-        toss: "NO TOSS DATA",
-        venue: "Narendra Modi Stadium, Ahmedabad",
-        last_over: ["-", "-", "-", "-", "-", "-"],
-        prediction: "AI STANDBY",
-        match_prediction: "AWAITING CORE INITIALIZATION",
-        ledger_analysis: "AWAITING LEDGER SYNC",
-        source_url: "CREX (Unified Live Array)",
-        fetch_code: "OH"
+        title: "GT VS RCB | GRAND FINAL", status: "Initializing Tracker...", match_state: "standby", winner: "PENDING",
+        live_score: "NO SCORE", current_rr: "0.00", required_rr: "0.00",
+        striker: "NO STRIKER", non_striker: "NO NON-STRIKER", bowler: "NO BOWLER",
+        batter_1: "NO STRIKER", batter_2: "NO NON-STRIKER", bat_1: "NO STRIKER", bat_2: "NO NON-STRIKER",
+        toss: "NO TOSS DATA", venue: "Narendra Modi Stadium, Ahmedabad", last_over: ["-", "-", "-", "-", "-", "-"],
+        prediction: "AI STANDBY", match_prediction: "AWAITING CORE INITIALIZATION", ledger_analysis: "AWAITING LEDGER SYNC",
+        source_url: "CREX (Chase Engine Active)", fetch_code: "OH"
     };
 }
 
 async function executeResilientNetworkRequest(url, maxRetries = 2) {
-    let currentAttempt = 0;
-    let requestDelay = 500;
-
+    let currentAttempt = 0; let requestDelay = 500;
     while (currentAttempt <= maxRetries) {
         try {
-            const cacheBuster = Date.now();
-            const fetchUrl = url.includes('?') ? `${url}&_t=${cacheBuster}` : `${url}?_t=${cacheBuster}`;
-
-            const response = await axios.get(fetchUrl, {
-                headers: SECURE_BROWSER_HEADERS,
-                timeout: 5500,
-                maxRedirects: 3
-            });
-
-            if (response.data && typeof response.data === 'string' && response.data.length > 500) {
-                return { success: true, data: response.data, error: null };
-            } else {
-                throw new Error("Empty or malformed HTML payload.");
-            }
+            const fetchUrl = url.includes('?') ? `${url}&_t=${Date.now()}` : `${url}?_t=${Date.now()}`;
+            const response = await axios.get(fetchUrl, { headers: SECURE_BROWSER_HEADERS, timeout: 6000, maxRedirects: 3 });
+            if (response.data && response.data.length > 500) return { success: true, data: response.data, error: null };
+            throw new Error("Empty Payload.");
         } catch (error) {
             currentAttempt++;
-            if (currentAttempt > maxRetries) {
-                return { success: false, data: null, error: error.message };
-            }
+            if (currentAttempt > maxRetries) return { success: false, data: null, error: error.message };
             await new Promise(resolve => setTimeout(resolve, requestDelay));
             requestDelay *= 2;
         }
@@ -108,9 +59,7 @@ module.exports = async function (req, res) {
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
 
-    if (req.method === 'OPTIONS') {
-        return res.status(200).end();
-    }
+    if (req.method === 'OPTIONS') return res.status(200).end();
 
     let payload = generateBasePayload();
     const exactFinalUrl = "https://crex.live/cricket-live-score/gt-vs-rcb-final-indian-premier-league-2026-match-updates-11XM";
@@ -130,12 +79,11 @@ module.exports = async function (req, res) {
         return res.status(200).json({ success: false, error: networkResponse.error, match_info: payload });
     }
 
-    // Pass validated HTML directly to inner structural extraction layers
     return executeDataScrapeLayer(res, networkResponse.data, payload, ledgerExposureTeam1, ledgerExposureTeam2, clientStringTeam1, clientStringTeam2);
 };
 
 // =========================================================================================
-// [SECTION 2] DEEP SPACE FLATTENING LAYER
+// [SECTION 2] DOM FLATTENING & ISOLATION
 // =========================================================================================
 function executeDataScrapeLayer(res, htmlData, payload, e1, e2, t1Name, t2Name) {
     const pageContextObject = cheerio.load(htmlData);
@@ -161,7 +109,7 @@ function executeDataScrapeLayer(res, htmlData, payload, e1, e2, t1Name, t2Name) 
 }
 
 // =========================================================================================
-// [SECTION 3] TELEMETRY ALIGNMENT & EXTRACTION
+// [SECTION 3] METRICS & FLUID REGEX EXTRACTION (REPAIRED)
 // =========================================================================================
 function processMatchTelemetry(res, domRows, pageTitle, payload, e1, e2, t1Name, t2Name) {
     let unifiedPageDataString = domRows.join(' ');
@@ -174,25 +122,23 @@ function processMatchTelemetry(res, domRows, pageTitle, payload, e1, e2, t1Name,
             break;
         }
     }
-    
     payload.status = statusTextElement || "Live Match Active";
     let statusTextLowercase = payload.status.toLowerCase();
 
-    let liveScoreRegexPattern = /\b(GT|RCB)\s+(\d+)[\/\-](\d+)\s*\(?([\d\.]+)\)?/i;
+    // 🔴 BUG FIX: Removed requirement for Overs to exist. Matches "RCB 2/0" or "RCB 2-0 (0.2)"
+    let liveScoreRegexPattern = /\b(GT|RCB)\s*(\d+)[\/\-](\d+)(?:\s*\(?([\d\.]+)\)?)?/i;
     let scoreElementFound = false;
     let activeInningsBattingTeam = "GT";
-    let liveInningsRuns = 0;
-    let liveInningsWickets = 0;
-    let activeOversCompletedString = "0.0";
-    let totalBallsBowledCount = 0;
+    let liveInningsRuns = 0; let liveInningsWickets = 0;
+    let activeOversCompletedString = "0.0"; let totalBallsBowledCount = 0;
 
     for (let row of domRows) {
         let coreScoreMatch = row.match(liveScoreRegexPattern);
         if (coreScoreMatch) {
             activeInningsBattingTeam = coreScoreMatch[1].toUpperCase();
-            liveInningsRuns = parseInt(coreScoreMatch[2]);
-            liveInningsWickets = parseInt(coreScoreMatch[3]);
-            activeOversCompletedString = coreScoreMatch[4];
+            liveInningsRuns = parseInt(coreScoreMatch[2]) || 0;
+            liveInningsWickets = parseInt(coreScoreMatch[3]) || 0;
+            activeOversCompletedString = coreScoreMatch[4] || "0.0"; // Fallback if missing
             
             let oversSplitArray = activeOversCompletedString.split('.');
             totalBallsBowledCount = (parseInt(oversSplitArray[0]) * 6) + (parseInt(oversSplitArray[1]) || 0);
@@ -202,18 +148,32 @@ function processMatchTelemetry(res, domRows, pageTitle, payload, e1, e2, t1Name,
         }
     }
 
-    if (statusTextLowercase.includes('starts at') || statusTextLowercase.includes('yet to begin') || pageTitle.toLowerCase().includes('upcoming')) {
+    // Backup Title Scan
+    if (!scoreElementFound) {
+        let fallbackMatch = pageTitle.match(liveScoreRegexPattern);
+        if (fallbackMatch) {
+            activeInningsBattingTeam = fallbackMatch[1].toUpperCase();
+            liveInningsRuns = parseInt(fallbackMatch[2]) || 0;
+            liveInningsWickets = parseInt(fallbackMatch[3]) || 0;
+            activeOversCompletedString = fallbackMatch[4] || "0.0";
+            totalBallsBowledCount = (parseInt(activeOversCompletedString.split('.')[0]) * 6) + (parseInt(activeOversCompletedString.split('.')[1]) || 0);
+            payload.live_score = `${activeInningsBattingTeam} ${liveInningsRuns}/${liveInningsWickets} (${activeOversCompletedString})`;
+            scoreElementFound = true;
+        }
+    }
+
+    if (statusTextLowercase.includes('starts at') || statusTextLowercase.includes('yet to begin')) {
         payload.match_state = "future";
     } else if (statusTextLowercase.includes('won by') || statusTextLowercase.includes('tied') || statusTextLowercase.includes('abandoned')) {
         payload.match_state = "completed";
     } else if (scoreElementFound || unifiedPageDataString.includes('CRR')) {
         payload.match_state = "live";
+    } else {
+        payload.match_state = "live"; // Force live if status contains "need X runs"
     }
 
     if (payload.match_state === "future") {
         payload.live_score = "MATCH NOT STARTED";
-        payload.current_rr = "0.00"; payload.required_rr = "0.00";
-        payload.striker = "Awaiting Play"; payload.non_striker = "Awaiting Play"; payload.bowler = "Awaiting Play";
         return res.status(200).json({ success: true, match_info: payload });
     }
 
@@ -237,21 +197,28 @@ function processMatchTelemetry(res, domRows, pageTitle, payload, e1, e2, t1Name,
         trueCurrentRunRate = (liveInningsRuns / totalBallsBowledCount) * 6;
         payload.current_rr = trueCurrentRunRate.toFixed(2);
     }
+    if (statusTextLowercase.includes('need') && payload.required_rr === "0.00") {
+        isSecondInningsChasePhase = true; 
+        payload.required_rr = "Tracking Chase..."; // Failsafe if exact number isn't caught
+    }
 
+    // 🔴 BUG FIX: Removed `^` anchor from regexes to allow floating spaces/icons
     let validatedBattersList = [];
     let uniquelyIdentifiedBowler = "";
 
     for (let row of domRows) {
-        if (row.match(/Last wkt|Partnership|P'ship|Extras|Total|Bowler|Batter/i)) continue;
-        let structuralBattingMatch = row.match(/^([A-Za-z\s\.\-']{2,25})\s+(\d+)\s*\(\s*(\d+)\s*\)/);
+        if (row.match(/Last wkt|Partnership|P'ship|Extras|Total|Bowler|Batter|R\(B\)/i)) continue;
+        
+        let structuralBattingMatch = row.match(/([A-Za-z\s\.\-']{2,25})\s+(\d+)\s*\(\s*(\d+)\s*\)/);
         if (structuralBattingMatch) {
             let extractedPlayerName = structuralBattingMatch[1].replace(/[A-Z]{3,}/g, '').trim();
             let completePlayerStatusString = `${extractedPlayerName} ${structuralBattingMatch[2]}(${structuralBattingMatch[3]})`;
             validatedBattersList.push({ text: completePlayerStatusString, isStriker: row.includes('*STRIKER_ACTIVE_TOKEN*') });
         }
-        let structuralBowlingMatch = row.match(/^([A-Za-z\s\.\-']{2,25})\s+(\d+[\-\/]\d+)\s+([\d\.]+)/) || row.match(/^([A-Za-z\s\.\-']{2,25})\s+(\d+[\-\/]\d+)/);
+        
+        let structuralBowlingMatch = row.match(/([A-Za-z\s\.\-']{2,25})\s+(\d+[\-\/]\d+)\s+([\d\.]+)/) || row.match(/([A-Za-z\s\.\-']{2,25})\s+(\d+[\-\/]\d+)/);
         if (structuralBowlingMatch && !uniquelyIdentifiedBowler) {
-            let verifiedBowlerName = structuralBowlingMatch[1].replace(/(Econ|Overs|Runs|Wickets|Bowler)/gi, '').trim();
+            let verifiedBowlerName = structuralBowlingMatch[1].replace(/(Econ|Overs|Runs|Wickets|Bowler|Recent)/gi, '').trim();
             uniquelyIdentifiedBowler = verifiedBowlerName.split(/\s+/).slice(-2).join(' ') + ` (${structuralBowlingMatch[2]})`;
         }
     }
@@ -284,13 +251,12 @@ function processMatchTelemetry(res, domRows, pageTitle, payload, e1, e2, t1Name,
 }
 
 // =========================================================================================
-// [SECTION 4] ODDS RESOLVER & TRADING STRATEGY ARCHITECTURE
+// [SECTION 4] ODDS RESOLVER & TRADING STRATEGY
 // =========================================================================================
 function runChampionshipOracleLogic(res, domRows, payload, e1, e2, t1Name, t2Name, runs, wickets, totalBalls, crr, isChase, batTeam) {
     let isRealMarketOddsScraped = false;
     let bookmakerFavoriteTeamToken = "";
-    let favoriteBackOddsPaise = 0;
-    let favoriteLayOddsPaise = 0;
+    let favoriteBackOddsPaise = 0; let favoriteLayOddsPaise = 0;
     let combinedOddsStringDisplay = "N/A";
 
     for (let row of domRows) {
@@ -355,9 +321,7 @@ function runChampionshipOracleLogic(res, domRows, payload, e1, e2, t1Name, t2Nam
                 projectedLinesArray.push(`[${milestone}v: ${microProjectedScoreTotal}]`);
             }
         }
-        if (projectedLinesArray.length > 0) {
-            payload.prediction = `TARGETS: ${projectedLinesArray.join(' ')}\nTACTIC: ${activeInplayStrategicTactic}`;
-        }
+        if (projectedLinesArray.length > 0) payload.prediction = `TARGETS: ${projectedLinesArray.join(' ')}\nTACTIC: ${activeInplayStrategicTactic}`;
     }
 
     if (favoriteBackOddsPaise > 0 && favoriteBackOddsPaise <= 22) {
@@ -365,7 +329,7 @@ function runChampionshipOracleLogic(res, domRows, payload, e1, e2, t1Name, t2Nam
         payload.match_prediction += `\n<br><span style="color:#b366ff; font-weight:bold;">[SHADOW TRADER]</span> <span style="color:#fff;">${bookmakerFavoriteTeamToken} is extremely cheap (${favoriteBackOddsPaise}p). Asymmetrical risk: High value to LAY ${bookmakerFavoriteTeamToken} for a quick trading swing. ${reversalTriggerReason} shifts this market 30-40 paise.</span>`;
     }
 
-    // --- QUANTUM HEDGE MATH ENGINE ---
+    // --- HEDGE MATH ---
     let hedgeAdvice = "";
     const normalizeShortToken = (name) => {
         let normalizedString = name.toLowerCase().trim();
@@ -409,6 +373,8 @@ function runChampionshipOracleLogic(res, domRows, payload, e1, e2, t1Name, t2Nam
         }
     } else if (mappedFavExposure >= 0 && mappedOppExposure >= 0) {
         hedgeAdvice = `✅ [BOOK SECURED] Zero risk exposure maintained. (${bookmakerFavoriteTeamToken}: +${mappedFavExposure.toFixed(0)} | ${oppTeamName}: +${mappedOppExposure.toFixed(0)})`;
+    } else {
+        hedgeAdvice = `🔴 [CRITICAL ERROR] Negative exposure bound on both factions. Lay the active favorite immediately.`;
     }
 
     payload.ledger_analysis = hedgeAdvice;
