@@ -1,6 +1,7 @@
 // =========================================================================================
-// CREX LIVE PIN-TO-PIN EXTRACTOR
-// Version: 19.0.0 | Clean Visible-Text Scorecard Parser + Odds Chip Reader
+// CREX LIVE SCRAPER - GT vs RCB
+// Version: 20.0.0
+// Clean section parsing, no synthetic odds, no noisy full-page guessing
 // =========================================================================================
 
 const axios = require('axios');
@@ -144,7 +145,7 @@ function normalizeTeamToken(name) {
     return cleanText(name).toUpperCase();
 }
 
-function linesFromHtml(html) {
+function htmlToLines(html) {
     let s = String(html || '');
 
     s = s
@@ -158,9 +159,16 @@ function linesFromHtml(html) {
         .filter(Boolean);
 }
 
-function sectionBetween(lines, startRegex, endRegex) {
-    const start = lines.findIndex(line => startRegex.test(line));
-    if (start === -1) return [];
+function findIndexAfter(lines, startRegex, fromIndex = 0) {
+    for (let i = fromIndex; i < lines.length; i++) {
+        if (startRegex.test(lines[i])) return i;
+    }
+    return -1;
+}
+
+function getSection(lines, startRegex, endRegex, fromIndex = 0) {
+    const start = findIndexAfter(lines, startRegex, fromIndex);
+    if (start === -1) return { start: -1, end: -1, lines: [] };
 
     let end = lines.length;
     for (let i = start + 1; i < lines.length; i++) {
@@ -170,15 +178,52 @@ function sectionBetween(lines, startRegex, endRegex) {
         }
     }
 
-    return lines.slice(start + 1, end);
+    return { start, end, lines: lines.slice(start, end) };
 }
 
-function findScoreLine(lines) {
-    for (const line of lines) {
-        if (/need\s+\d+\s+runs?\s+in\s+\d+\s+balls?/i.test(line)) continue;
+function joinSection(lines) {
+    return lines.map(cleanText).filter(Boolean).join(' ');
+}
 
-        const m = line.match(/\b(GT|RCB)\s+(\d{1,3})\s*[-/]\s*(\d{1,2})\s*\(?(\d{1,2}(?:\.\d)?)\)?\b/i);
-        if (m) {
+function dedupeByKey(items, keyFn) {
+    const seen = new Set();
+    const out = [];
+    for (const item of items) {
+        const key = keyFn(item);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(item);
+    }
+    return out;
+}
+
+function looksLikeScoreLine(line) {
+    return /\b(GT|RCB)\s+\d{1,3}\s*[-/]\s*\d{1,2}\s*\(?\d+(?:\.\d+)?\)?\b/i.test(line) && !/need\s+\d+\s+runs?\s+in\s+\d+\s+balls?/i.test(line);
+}
+
+function extractLiveScore(lines) {
+    // 1) Look for the dedicated score line near Match Details
+    for (let i = 0; i < lines.length - 1; i++) {
+        const a = cleanText(lines[i]);
+        const b = cleanText(lines[i + 1]);
+
+        if (/^(GT|RCB)$/i.test(a) && /^\d{1,3}\s*[-/]\s*\d{1,2}\s*\(?\d+(?:\.\d+)?\)?$/.test(b)) {
+            const scoreMatch = b.match(/^(\d{1,3})\s*[-/]\s*(\d{1,2})\s*\(?(\d+(?:\.\d+)?)\)?$/);
+            if (scoreMatch) {
+                return {
+                    team: a.toUpperCase(),
+                    runs: toInt(scoreMatch[1]),
+                    wickets: toInt(scoreMatch[2]),
+                    overs: scoreMatch[3]
+                };
+            }
+        }
+    }
+
+    // 2) Fallback: any line that directly contains the score
+    for (const line of lines) {
+        const m = line.match(/\b(GT|RCB)\s+(\d{1,3})\s*[-/]\s*(\d{1,2})\s*\(?(\d+(?:\.\d+)?)\)?\b/i);
+        if (m && !/need\s+\d+\s+runs?\s+in\s+\d+\s+balls?/i.test(line)) {
             return {
                 team: m[1].toUpperCase(),
                 runs: toInt(m[2]),
@@ -187,10 +232,11 @@ function findScoreLine(lines) {
             };
         }
     }
+
     return null;
 }
 
-function findNeedLine(lines) {
+function extractNeedLine(lines) {
     for (const line of lines) {
         const m = line.match(/\b(GT|RCB)\s+need\s+(\d+)\s+runs?\s+in\s+(\d+)\s+balls?/i);
         if (m) {
@@ -205,11 +251,10 @@ function findNeedLine(lines) {
     return null;
 }
 
-function findTitle($, lines) {
-    const raw = cleanText($('title').text());
-
-    if (raw && raw.length <= 80 && !/CREX Home|Commentary|Scorecard|Stats|Rankings|News/i.test(raw)) {
-        return raw;
+function extractTitle($, lines) {
+    const title = cleanText($('title').text());
+    if (title && !/Please enable JavaScript/i.test(title) && title.length < 120) {
+        return title;
     }
 
     for (const line of lines.slice(0, 20)) {
@@ -221,17 +266,18 @@ function findTitle($, lines) {
     return 'GT vs RCB, Final T20';
 }
 
-function findVenue(root, lines) {
-    const direct = cleanText(findFirstValueByKeys(root, ['venue', 'stadium', 'ground', 'venue_name', 'venuename']) || '');
-    if (direct) return direct;
+function extractVenue(state, lines) {
+    const fromState = cleanText(findFirstValueByKeys(state, ['venue', 'stadium', 'ground', 'venue_name', 'venuename']) || '');
+    if (fromState) return fromState;
 
     for (const line of lines) {
         if (/Narendra Modi Stadium/i.test(line)) return 'Narendra Modi Stadium, Ahmedabad';
     }
+
     return 'Narendra Modi Stadium, Ahmedabad';
 }
 
-function findToss(lines, fallbackText) {
+function extractToss(lines, fallbackText) {
     for (const line of lines) {
         if (/toss/i.test(line) && /(opt(?:ed|s)? to|chose to|elect(?:ed|s)? to|decided to)\s+(bat|bowl|field)/i.test(line)) {
             return cleanText(line);
@@ -242,126 +288,123 @@ function findToss(lines, fallbackText) {
     return m ? cleanText(m[1]) : 'UNAVAILABLE';
 }
 
-function extractBatterRowsFromText(text) {
-    const rows = [];
-    const seen = new Set();
+function extractCRR(lines, state) {
+    for (const line of lines) {
+        const m = line.match(/CRR\s*[:\-]?\s*(\d+(?:\.\d+)?)/i);
+        if (m) return m[1];
+    }
 
-    const regex = /([A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){0,2})\s*(\d+)\s*\(\s*(\d+)\s*\)/g;
+    const direct = findFirstValueByKeys(state, ['current_rr', 'crr', 'currentrunrate', 'current_run_rate']);
+    if (direct !== undefined && direct !== null && direct !== '') {
+        const n = toFloat(direct);
+        if (n !== null) return n.toFixed(2);
+    }
+
+    return '0.00';
+}
+
+function extractRRR(lines, state) {
+    for (const line of lines) {
+        const m = line.match(/RRR\s*[:\-]?\s*(\d+(?:\.\d+)?)/i);
+        if (m) return m[1];
+    }
+
+    const direct = findFirstValueByKeys(state, ['required_rr', 'rrr', 'requiredrunrate', 'required_run_rate']);
+    if (direct !== undefined && direct !== null && direct !== '') {
+        const n = toFloat(direct);
+        if (n !== null) return n.toFixed(2);
+    }
+
+    return '1st Innings';
+}
+
+function extractBatsmen(lines, state, fallbackText) {
+    // Primary scorecard section: lines between Match info / Live / Scorecard and before bowler / commentary
+    const scorecard = getSection(
+        lines,
+        /^(Match info|Live|Scorecard)$/i,
+        /^(Bowler|Commentary|Projected Score|P'ship|Last Wkt|Last Wicket)$/i
+    );
+
+    let text = joinSection(scorecard.lines);
+
+    if (!text) {
+        const direct = cleanText(findFirstValueByKeys(state, ['batsmen', 'batters', 'currentbatsmen', 'current_batsmen', 'batter']) || '');
+        text = direct || cleanText(fallbackText);
+    }
+
+    // Parse full-name + runs(balls), but ignore headers and obviously wrong tokens.
+    const regex = /([A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){1,2})\s+(\d+)\s*\(\s*(\d+)\s*\)/g;
+    const items = [];
     let m;
 
     while ((m = regex.exec(text)) !== null) {
         const name = cleanText(m[1]);
         const runs = toInt(m[2]);
         const balls = toInt(m[3]);
-        const key = `${name}|${runs}|${balls}`;
 
         if (!name || runs === null || balls === null) continue;
-        if (/^Over\s+\d+/i.test(name)) continue;
-        if (seen.has(key)) continue;
+        if (/^(Over|Batter|Batters|Bowler|Match|Commentary|Projected|Last|P'ship)$/i.test(name)) continue;
 
-        seen.add(key);
-        rows.push({ name, runs, balls });
+        items.push({ name, runs, balls });
     }
 
-    return rows;
+    const unique = dedupeByKey(items, x => x.name.toLowerCase());
+    return unique.slice(0, 2);
 }
 
-function extractBatsmen(lines, root, fallbackText) {
-    const scorecardSection = sectionBetween(
+function extractBowler(lines, state, fallbackText) {
+    const bowlerSection = getSection(
         lines,
-        /^(batter|batters|batsman|batsmen)\b/i,
-        /^(bowler|partnership|p'ship|last wkt|last wicket|recent|commentary|overs|match info|scorecard)\b/i
+        /^(Bowler)$/i,
+        /^(Commentary|Projected Score|P'ship|Last Wkt|Last Wicket)$/i
     );
 
-    let rows = [];
+    let text = joinSection(bowlerSection.lines);
 
-    if (scorecardSection.length) {
-        const joined = scorecardSection.join(' ');
-        rows = extractBatterRowsFromText(joined);
+    if (!text) {
+        const direct = cleanText(findFirstValueByKeys(state, ['bowler', 'currentbowler', 'lastbowler', 'bowling']) || '');
+        text = direct || cleanText(fallbackText);
     }
 
-    if (!rows.length) {
-        const directText = cleanText(
-            findFirstValueByKeys(root, ['batsmen', 'batters', 'currentbatsmen', 'current_batsmen', 'batter']) || ''
-        );
-        if (directText) rows = extractBatterRowsFromText(directText);
-    }
-
-    if (!rows.length) {
-        rows = extractBatterRowsFromText(fallbackText);
-    }
-
-    return rows.slice(0, 2);
-}
-
-function extractBowlerFromText(text) {
-    const seen = new Set();
-    const rows = [];
-
-    const regex = /([A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){0,2})\s+(\d+\s*[-/]\s*\d+)\b/g;
+    // Prefer explicit bowler figure like "Jason Holder 0-11(1.2)" or "Arshad Khan 0-7(1.0)"
+    const figureRegex = /([A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){1,2})\s+(\d+\s*[-/]\s*\d+(?:\(\d+(?:\.\d+)?\))?)/g;
     let m;
+    const hits = [];
 
-    while ((m = regex.exec(text)) !== null) {
+    while ((m = figureRegex.exec(text)) !== null) {
         const name = cleanText(m[1]);
         const fig = cleanText(m[2]).replace(/\s+/g, '');
-        const key = `${name}|${fig}`;
-
-        if (!name || seen.has(key)) continue;
-        if (/^(Over|Batter|Bowler|CRR|RRR|Target)$/i.test(name)) continue;
-        if (!/^\d+[-/]\d+$/.test(fig)) continue;
-
-        seen.add(key);
-        rows.push(`${name} (${fig})`);
+        if (!name || !fig) continue;
+        if (/^(Over|Batter|Batters|Bowler|Commentary|Projected|Last)$/i.test(name)) continue;
+        if (!/\d+[-/]\d+/.test(fig)) continue;
+        hits.push(`${name} (${fig})`);
     }
 
-    return rows[0] || '';
-}
-
-function extractBowler(lines, root, fallbackText) {
-    const bowlerSection = sectionBetween(
-        lines,
-        /^(bowler)\b/i,
-        /^(commentary|overs|match info|scorecard|partnership|p'ship|batter|batters|last wkt|last wicket)\b/i
-    );
-
-    if (bowlerSection.length) {
-        const joined = bowlerSection.join(' ');
-        const found = extractBowlerFromText(joined);
-        if (found) return found;
-    }
-
-    const directText = cleanText(
-        findFirstValueByKeys(root, ['bowler', 'currentbowler', 'lastbowler', 'bowling']) || ''
-    );
-    if (directText) {
-        const found = extractBowlerFromText(directText);
-        if (found) return found;
-    }
-
-    const fallback = extractBowlerFromText(fallbackText);
-    if (fallback) return fallback;
+    if (hits.length) return hits[0];
 
     return 'UNAVAILABLE';
 }
 
-function extractLastOver(lines, root, fallbackText) {
-    const text = lines.join(' ');
+function extractLastOver(lines, state, fallbackText) {
+    const joined = lines.join(' ');
 
-    const overPattern = /Over\s+\d+\s+((?:(?:Wd|Nb|W|[0-6])\s+){1,12})=\s*\d+/gi;
-    const matches = [...text.matchAll(overPattern)];
+    // Find the LAST explicit "Over N ... = X" block
+    const overRegex = /Over\s+\d+\s+((?:(?:Wd|Nb|W|[0-6])\s+){1,12})=\s*\d+/gi;
+    const matches = [...joined.matchAll(overRegex)];
 
     if (matches.length) {
-        const last = matches[matches.length - 1][1];
-        const balls = last
+        const raw = matches[matches.length - 1][1];
+        const balls = raw
             .trim()
             .split(/\s+/)
             .filter(t => /^(Wd|Nb|W|[0-6])$/i.test(t));
         if (balls.length >= 2) return balls.slice(-6);
     }
 
-    // Try direct state arrays
+    // Fallback: state array
     let found = null;
-    walkObject(root, (node) => {
+    walkObject(state, (node) => {
         if (found) return;
         if (!Array.isArray(node)) return;
 
@@ -369,9 +412,7 @@ function extractLastOver(lines, root, fallbackText) {
             .map(item => {
                 if (typeof item === 'string') return cleanText(item);
                 if (typeof item === 'number') return String(item);
-                if (isObject(item)) {
-                    return cleanText(item.result || item.ball || item.short || item.text || item.value || item.runs || item.outcome || '');
-                }
+                if (isObject(item)) return cleanText(item.result || item.ball || item.short || item.text || item.value || item.runs || item.outcome || '');
                 return '';
             })
             .filter(Boolean)
@@ -382,27 +423,28 @@ function extractLastOver(lines, root, fallbackText) {
 
     if (found) return found;
 
-    const fallbackMatches = [...cleanText(fallbackText).matchAll(/Over\s+\d+\s+((?:[WdNbW0-6]\s*){2,12})/gi)];
-    if (fallbackMatches.length) {
-        const last = fallbackMatches[fallbackMatches.length - 1][1];
-        const balls = last.split(/\s+/).filter(t => /^(Wd|Nb|W|[0-6])$/i.test(t));
+    // Fallback: a looser text scan
+    const loose = cleanText(fallbackText);
+    const looseMatches = [...loose.matchAll(/Over\s+\d+\s+((?:[WdNbW0-6]\s*){2,12})/gi)];
+    if (looseMatches.length) {
+        const raw = looseMatches[looseMatches.length - 1][1];
+        const balls = raw.split(/\s+/).filter(t => /^(Wd|Nb|W|[0-6])$/i.test(t));
         if (balls.length >= 2) return balls.slice(-6);
     }
 
     return ['-', '-', '-', '-', '-', '-'];
 }
 
-function extractOdds(lines, root) {
-    // 1) Look for the visible market chips, like: RCB 04 05
+function extractOddsFromText(lines) {
+    // Only accept explicit tiny chip values near team labels.
     for (const line of lines) {
         const normalized = cleanText(line);
 
-        const chipMatch = normalized.match(/\b(RCB|GT)\b[^0-9]{0,30}(\d{1,2})\s+(\d{1,2})\b/i);
+        // Example like: "Royal Challengers Benga... RCB 04 05"
+        const chipMatch = normalized.match(/\b(RCB|GT)\b[^0-9]{0,35}(\d{1,2})\s+(\d{1,2})\b/i);
         if (chipMatch) {
             const a = toInt(chipMatch[2]);
             const b = toInt(chipMatch[3]);
-
-            // Visible market chip values are tiny numbers; this avoids grabbing score digits.
             if (a !== null && b !== null && a <= 20 && b <= 20) {
                 return {
                     favTeam: chipMatch[1].toUpperCase(),
@@ -412,14 +454,14 @@ function extractOdds(lines, root) {
             }
         }
 
-        const teamChipMatch = normalized.match(/\b(RCB|GT|Royal Challengers|Gujarat Titans|Bengaluru|Bangalore|Titans)\b.*?\b(0?\d)\s+(0?\d)\b/i);
-        if (teamChipMatch) {
-            const a = toInt(teamChipMatch[2]);
-            const b = toInt(teamChipMatch[3]);
+        // Stronger but still conservative fallback
+        const chipMatch2 = normalized.match(/\b(RCB|GT)\b.*?\b(0?\d)\s+(0?\d)\b/i);
+        if (chipMatch2) {
+            const a = toInt(chipMatch2[2]);
+            const b = toInt(chipMatch2[3]);
             if (a !== null && b !== null && a <= 20 && b <= 20) {
-                const team = /RCB|Royal Challengers|Bengaluru|Bangalore/i.test(teamChipMatch[1]) ? 'RCB' : 'GT';
                 return {
-                    favTeam: team,
+                    favTeam: chipMatch2[1].toUpperCase(),
                     backPaise: pad2(Math.min(a, b)),
                     layPaise: pad2(Math.max(a, b))
                 };
@@ -427,10 +469,13 @@ function extractOdds(lines, root) {
         }
     }
 
-    // 2) Try state objects if available, but only accept explicit odds data.
+    return null;
+}
+
+function extractOddsFromState(state) {
     let found = null;
 
-    walkObject(root, (node) => {
+    walkObject(state, (node) => {
         if (found) return;
         if (!isObject(node)) return;
 
@@ -469,58 +514,19 @@ function extractOdds(lines, root) {
     return found;
 }
 
-function extractStatus(lines) {
-    const needLine = findNeedLine(lines);
-    if (needLine) return needLine.raw;
-
-    for (const line of lines) {
-        if (/innings break/i.test(line)) return 'Innings Break';
-        if (/won by/i.test(line)) return cleanText(line);
-        if (/yet to begin/i.test(line)) return cleanText(line);
-    }
-
-    return 'Live Match Active';
-}
-
 function getMatchState(statusText) {
     const t = cleanText(statusText).toLowerCase();
     if (t.includes('yet to begin') || t.includes('starts at') || t.includes('scheduled')) return 'future';
-    if (t.includes('won by') || t.includes('tied') || t.includes('abandoned')) return 'completed';
+    if (t.includes('won by') || t.includes('tied') || t.includes('abandoned') || t.includes('result')) return 'completed';
     return 'live';
 }
 
-function getCRR(lines, root) {
-    for (const line of lines) {
-        const m = line.match(/CRR\s*[:\-]?\s*(\d+(?:\.\d+)?)/i);
-        if (m) return m[1];
-    }
-
-    const direct = findFirstValueByKeys(root, ['current_rr', 'crr', 'currentrunrate', 'current_run_rate']);
-    if (direct !== undefined && direct !== null && direct !== '') {
-        const n = toFloat(direct);
-        if (n !== null) return n.toFixed(2);
-    }
-
-    return '0.00';
+function parseWickets(liveScore) {
+    const m = cleanText(liveScore).match(/\b\d+\s*[-/]\s*(\d+)\s*\(/);
+    return m ? (toInt(m[1]) || 0) : 0;
 }
 
-function getRRR(lines, root, statusText) {
-    for (const line of lines) {
-        const m = line.match(/RRR\s*[:\-]?\s*(\d+(?:\.\d+)?)/i);
-        if (m) return m[1];
-    }
-
-    const direct = findFirstValueByKeys(root, ['required_rr', 'rrr', 'requiredrunrate', 'required_run_rate']);
-    if (direct !== undefined && direct !== null && direct !== '') {
-        const n = toFloat(direct);
-        if (n !== null) return n.toFixed(2);
-    }
-
-    if (/need\s+\d+\s+runs?\s+in\s+\d+\s+balls?/i.test(statusText)) return 'LIVE';
-    return '1st Innings';
-}
-
-function derivePrediction(matchState, isSecondInnings, currentRR, wickets) {
+function buildPrediction(matchState, isSecondInnings, currentRR, wickets) {
     const crr = toFloat(currentRR) || 0;
     const wk = toInt(wickets) || 0;
 
@@ -538,15 +544,63 @@ function derivePrediction(matchState, isSecondInnings, currentRR, wickets) {
     return `LIVE ORACLE | PHASE MARKETS CLOSED\nTACTIC: ${tactic}`;
 }
 
-function parseWicketsFromLiveScore(liveScore) {
-    const m = cleanText(liveScore).match(/\b\d+\s*[-/]\s*(\d+)\s*\(/);
-    return m ? (toInt(m[1]) || 0) : 0;
+function isSecondInningsFromStatus(statusText, requiredRR) {
+    if (requiredRR === '1st Innings') return false;
+    if (/need\s+\d+\s+runs?\s+in\s+\d+\s+balls?/i.test(statusText)) return true;
+    return false;
 }
 
-function isSecondInnings(statusText, rrrValue) {
-    if (rrrValue === '1st Innings') return false;
-    if (rrrValue === 'LIVE') return true;
-    return /need\s+\d+\s+runs?\s+in\s+\d+\s+balls?/i.test(statusText);
+function buildLedgerAnalysis(ledgerExposureTeam1, ledgerExposureTeam2, odds, clientStringTeam1, clientStringTeam2) {
+    if (!odds) return '[ENTRY PROTOCOL] No active ledger. Wait for entry signals.';
+
+    const canonicalFav = normalizeTeamToken(odds.favTeam || '');
+    const canonicalT1 = normalizeTeamToken(clientStringTeam1);
+    const canonicalT2 = normalizeTeamToken(clientStringTeam2);
+
+    let mappedFavExposure = 0;
+    let mappedOppExposure = 0;
+    let oppTeamName = '';
+
+    if (canonicalFav && canonicalFav === canonicalT1) {
+        mappedFavExposure = ledgerExposureTeam1;
+        mappedOppExposure = ledgerExposureTeam2;
+        oppTeamName = clientStringTeam2;
+    } else if (canonicalFav && canonicalFav === canonicalT2) {
+        mappedFavExposure = ledgerExposureTeam2;
+        mappedOppExposure = ledgerExposureTeam1;
+        oppTeamName = clientStringTeam1;
+    }
+
+    if (ledgerExposureTeam1 === 0 && ledgerExposureTeam2 === 0) {
+        return '[ENTRY PROTOCOL] No active ledger. Wait for entry signals.';
+    }
+
+    if (mappedFavExposure > 0 && mappedOppExposure < 0) {
+        const liabilityTarget = Math.abs(mappedOppExposure);
+        const layTaxCost = liabilityTarget * (toInt(odds.layPaise) / 100);
+        const finalNetSecuredProfit = mappedFavExposure - layTaxCost;
+
+        if (finalNetSecuredProfit > 0) {
+            return `🟢 [GREEN BOOK AVAILABLE]\nTo clear -${Math.abs(mappedOppExposure).toFixed(0)} on ${oppTeamName}:\n> LAY ${odds.favTeam} at ${odds.layPaise}p.\n> FINAL BOOK: +${finalNetSecuredProfit.toFixed(0)}`;
+        }
+        return `🟡 [HEDGE PENDING] Wait for ${odds.favTeam} odds to improve.`;
+    }
+
+    if (mappedFavExposure < 0 && mappedOppExposure > 0) {
+        const backCoverStake = Math.abs(mappedFavExposure) / (toInt(odds.backPaise) / 100);
+        const finalNetSecuredProfit = mappedOppExposure - backCoverStake;
+
+        if (finalNetSecuredProfit > 0) {
+            return `🟢 [GREEN BOOK AVAILABLE]\nTo clear -${Math.abs(mappedFavExposure).toFixed(0)} on ${odds.favTeam}:\n> BACK ${odds.favTeam} at ${odds.backPaise}p.\n> FINAL BOOK: +${finalNetSecuredProfit.toFixed(0)}`;
+        }
+        return `🟡 [HEDGE PENDING] Wait for ${odds.favTeam} odds to drift.`;
+    }
+
+    if (mappedFavExposure >= 0 && mappedOppExposure >= 0) {
+        return `✅ [BOOK SCAN OK] ${odds.favTeam} @ ${odds.backPaise}-${odds.layPaise}p`;
+    }
+
+    return '✅ [BOOK SCAN OK] Odds unavailable';
 }
 
 // =========================================================================================
@@ -563,10 +617,10 @@ module.exports = async function (req, res) {
 
     if (req.method === 'OPTIONS') return res.status(200).end();
 
-    const exactFinalUrl = 'https://crex.live/cricket-live-score/gt-vs-rcb-final-indian-premier-league-2026-match-updates-11XM';
+    const exactFinalUrl = 'https://crex.com/cricket-live-score/gt-vs-rcb-final-indian-premier-league-2026-match-updates-11XM';
 
     let operationalTargetUrl = req.query.url || exactFinalUrl;
-    operationalTargetUrl = String(operationalTargetUrl).replace('crex.com', 'crex.live');
+    operationalTargetUrl = String(operationalTargetUrl).replace('crex.live', 'crex.com');
 
     const ledgerExposureTeam1 = parseFloat(req.query.e1) || 0;
     const ledgerExposureTeam2 = parseFloat(req.query.e2) || 0;
@@ -633,13 +687,10 @@ module.exports = async function (req, res) {
 
     const $ = cheerio.load(htmlData);
     const bodyHtml = $('body').html() || htmlData;
-    const lines = linesFromHtml(bodyHtml);
+    const lines = htmlToLines(bodyHtml);
     const fallbackText = cleanText($('body').text() || htmlData);
 
-    // =========================================================================================
-    // OPTIONAL STRUCTURED STATE PARSING
-    // =========================================================================================
-
+    // Structured state if the page exposes it
     let parsedState = null;
     const scripts = $('script')
         .map((_, el) => $(el).html() || '')
@@ -669,14 +720,14 @@ module.exports = async function (req, res) {
 
     const state = parsedState || {};
 
-    // =========================================================================================
-    // FIELD EXTRACTION
-    // =========================================================================================
+    // Title / status / state
+    payload.title = extractTitle($, lines);
+    const needObj = extractNeedLine(lines);
+    payload.status = needObj ? needObj.raw : (findFirstValueByKeys(state, ['status', 'matchstatus', 'match_state']) ? cleanText(findFirstValueByKeys(state, ['status', 'matchstatus', 'match_state'])) : cleanText(payload.status));
+    if (!payload.status || payload.status === 'Initializing...') {
+        payload.status = cleanText(fallbackText.match(/RCB need \d+ runs in \d+ balls/i)?.[0] || 'Live Match Active');
+    }
 
-    payload.title = findTitle($, lines);
-
-    const statusObj = findNeedLine(lines);
-    payload.status = statusObj ? statusObj.raw : extractStatus(lines);
     payload.match_state = getMatchState(payload.status);
 
     if (payload.match_state === 'completed') {
@@ -684,106 +735,52 @@ module.exports = async function (req, res) {
         if (winMatch) payload.winner = cleanText(winMatch[1]).toUpperCase();
     }
 
-    payload.venue = findVenue(state, lines);
-    payload.toss = findToss(lines, fallbackText);
+    payload.venue = extractVenue(state, lines) || payload.venue;
+    payload.toss = extractToss(lines, fallbackText) || payload.toss;
 
-    const scoreObj = findScoreLine(lines);
-    if (scoreObj) {
-        payload.live_score = `${scoreObj.team} ${scoreObj.runs}/${scoreObj.wickets} (${scoreObj.overs})`;
+    // Live score and run rates
+    const liveScoreObj = extractLiveScore(lines);
+    if (liveScoreObj) {
+        payload.live_score = `${liveScoreObj.team} ${liveScoreObj.runs}/${liveScoreObj.wickets} (${liveScoreObj.overs})`;
     } else {
-        const stateScore = cleanText(findFirstValueByKeys(state, ['live_score', 'livescore', 'scoreline', 'score_text']) || '');
-        if (stateScore && /\d/.test(stateScore)) payload.live_score = stateScore;
+        const stateLive = cleanText(findFirstValueByKeys(state, ['live_score', 'livescore', 'scoreline', 'score_text']) || '');
+        if (stateLive && /\d/.test(stateLive)) payload.live_score = stateLive;
     }
 
-    payload.current_rr = getCRR(lines, state);
+    payload.current_rr = extractCRR(lines, state);
+    payload.required_rr = extractRRR(lines, state);
 
-    const rrrValue = getRRR(lines, state, payload.status);
-    payload.required_rr = rrrValue;
+    // Batsmen
+    const batsmen = extractBatsmen(lines, state, fallbackText);
+    if (batsmen.length >= 1) payload.bat_1 = `${batsmen[0].name} ${batsmen[0].runs}(${batsmen[0].balls})`;
+    if (batsmen.length >= 2) payload.bat_2 = `${batsmen[1].name} ${batsmen[1].runs}(${batsmen[1].balls})`;
 
-    const batters = extractBatsmen(lines, state, fallbackText);
-    if (batters.length) {
-        payload.bat_1 = `${batters[0].name} ${batters[0].runs}(${batters[0].balls})`;
-        if (batters[1]) {
-            payload.bat_2 = `${batters[1].name} ${batters[1].runs}(${batters[1].balls})`;
-        }
-    }
-
+    // Bowler
     payload.bowler = extractBowler(lines, state, fallbackText);
 
+    // Last over
     const lastOver = extractLastOver(lines, state, fallbackText);
     if (lastOver && lastOver.length) {
         payload.last_over = lastOver.slice(-6);
         while (payload.last_over.length < 6) payload.last_over.unshift('-');
     }
 
-    // =========================================================================================
-    // ODDS
-    // =========================================================================================
-
-    const odds = extractOdds(lines, state);
+    // Odds
+    const odds =
+        extractOddsFromText(lines) ||
+        extractOddsFromState(state);
 
     if (odds && odds.favTeam && odds.backPaise && odds.layPaise) {
         payload.match_prediction = `[LIVE MARKET ODDS] ${odds.favTeam} is Favorite at ${odds.backPaise}-${odds.layPaise} Paise`;
     } else {
-        payload.match_prediction = `[LIVE MARKET ODDS] Unavailable`;
+        payload.match_prediction = '[LIVE MARKET ODDS] Unavailable';
     }
 
-    // =========================================================================================
-    // SIMPLE TACTIC / LEDGER ANALYSIS
-    // =========================================================================================
-
-    const wickets = parseWicketsFromLiveScore(payload.live_score);
-    const secondInnings = isSecondInnings(payload.status, payload.required_rr);
-    payload.prediction = derivePrediction(payload.match_state, secondInnings, payload.current_rr, wickets);
-
-    const canonicalFav = normalizeTeamToken(odds?.favTeam || '');
-    const canonicalT1 = normalizeTeamToken(clientStringTeam1);
-    const canonicalT2 = normalizeTeamToken(clientStringTeam2);
-
-    let mappedFavExposure = 0;
-    let mappedOppExposure = 0;
-    let oppTeamName = '';
-
-    if (canonicalFav && canonicalFav === canonicalT1) {
-        mappedFavExposure = ledgerExposureTeam1;
-        mappedOppExposure = ledgerExposureTeam2;
-        oppTeamName = clientStringTeam2;
-    } else if (canonicalFav && canonicalFav === canonicalT2) {
-        mappedFavExposure = ledgerExposureTeam2;
-        mappedOppExposure = ledgerExposureTeam1;
-        oppTeamName = clientStringTeam1;
-    }
-
-    let hedgeAdvice = '';
-
-    if (ledgerExposureTeam1 === 0 && ledgerExposureTeam2 === 0) {
-        hedgeAdvice = '[ENTRY PROTOCOL] No active ledger. Wait for entry signals.';
-    } else if (odds && mappedFavExposure > 0 && mappedOppExposure < 0) {
-        const liabilityTarget = Math.abs(mappedOppExposure);
-        const layTaxCost = liabilityTarget * (toInt(odds.layPaise) / 100);
-        const finalNetSecuredProfit = mappedFavExposure - layTaxCost;
-
-        if (finalNetSecuredProfit > 0) {
-            hedgeAdvice = `🟢 [GREEN BOOK AVAILABLE]\nTo clear -${Math.abs(mappedOppExposure).toFixed(0)} on ${oppTeamName}:\n> LAY ${odds.favTeam} at ${odds.layPaise}p.\n> FINAL BOOK: +${finalNetSecuredProfit.toFixed(0)}`;
-        } else {
-            hedgeAdvice = `🟡 [HEDGE PENDING] Wait for ${odds.favTeam} odds to improve.`;
-        }
-    } else if (odds && mappedFavExposure < 0 && mappedOppExposure > 0) {
-        const backCoverStake = Math.abs(mappedFavExposure) / (toInt(odds.backPaise) / 100);
-        const finalNetSecuredProfit = mappedOppExposure - backCoverStake;
-
-        if (finalNetSecuredProfit > 0) {
-            hedgeAdvice = `🟢 [GREEN BOOK AVAILABLE]\nTo clear -${Math.abs(mappedFavExposure).toFixed(0)} on ${odds.favTeam}:\n> BACK ${odds.favTeam} at ${odds.backPaise}p.\n> FINAL BOOK: +${finalNetSecuredProfit.toFixed(0)}`;
-        } else {
-            hedgeAdvice = `🟡 [HEDGE PENDING] Wait for ${odds.favTeam} odds to drift.`;
-        }
-    } else if (odds) {
-        hedgeAdvice = `✅ [BOOK SCAN OK] ${odds.favTeam} @ ${odds.backPaise}-${odds.layPaise}p`;
-    } else {
-        hedgeAdvice = '✅ [BOOK SCAN OK] Odds unavailable';
-    }
-
-    payload.ledger_analysis = hedgeAdvice;
+    // Prediction + ledger analysis
+    const wickets = parseWickets(payload.live_score);
+    const secondInnings = isSecondInningsFromStatus(payload.status, payload.required_rr);
+    payload.prediction = buildPrediction(payload.match_state, secondInnings, payload.current_rr, wickets);
+    payload.ledger_analysis = buildLedgerAnalysis(ledgerExposureTeam1, ledgerExposureTeam2, odds, clientStringTeam1, clientStringTeam2);
 
     return res.status(200).json({
         success: true,
